@@ -1,0 +1,34 @@
+# Ambiente virtual
+.venv/
+
+# Cache do Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Cache de testes
+.pytest_cache/
+
+# Arquivos gerados pelo sistema
+crachas_montados/
+logs/
+_diag_saida/uploads/
+_diag_saida/previews/
+
+# Arquivos grandes e desnecessários
+cracharmodeloiema.png
+cracharmodeloiema2.png
+modelo_alunos.xlsx
+
+# VS Code
+.vscode/
+
+# Ambiente e IDE
+.env
+.idea/
+*.swp
+*.swo
+
+# Windows
+Thumbs.db
+Desktop.ini

@@ -1,0 +1,10 @@
+# Dependências do Sistema de Montagem de Crachás
+# Core
+pandas>=2.0.0
+openpyxl>=3.1.0
+Pillow>=10.0.0
+qrcode[pil]>=7.4.0
+
+# Web API (para interface web moderna)
+flask>=3.0.0
+flask-cors>=4.0.0
