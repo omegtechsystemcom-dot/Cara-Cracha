@@ -183,6 +183,27 @@
                         </div>
                     </div>
                 </div>
+
+                <div class="card" style="margin-top: 1.5rem;">
+                    <div class="card-header">
+                        <h3>Importar Fotos dos Alunos</h3>
+                        <p class="text-muted">Identificação pelo código/matrícula ou pelo nome do aluno</p>
+                    </div>
+                    <div class="card-body">
+                        <div class="upload-zone upload-zone-compact" id="fotosUploadZone">
+                            <div class="upload-icon">📷</div>
+                            <p class="upload-text">Selecione todas as fotos de uma vez</p>
+                            <p class="upload-hint">Exemplos: 2024001.jpg ou maria_da_silva.jpg — JPG, PNG, GIF ou BMP</p>
+                            <input type="file" id="fotosInput" accept=".jpg,.jpeg,.png,.gif,.bmp,image/*"
+                                   multiple style="display:none" onchange="handleFotosSelect(event)">
+                            <button class="btn btn-primary" id="btnSelecionarFotos"
+                                    onclick="document.getElementById('fotosInput').click()">
+                                Selecionar Fotos
+                            </button>
+                            <p class="upload-status" id="fotosUploadStatus"></p>
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <!-- ===== ALUNOS ===== -->
@@ -254,7 +275,7 @@
                                 <label class="radio-card" data-value="pdf">
                                     <input type="radio" name="formato" value="pdf" onchange="mudarFormato(this)">
                                     <span class="radio-icon">📄</span>
-                                    <span class="radio-label">PDF</span>
+                                    <span class="radio-label">PDF individual</span>
                                 </label>
                                 <label class="radio-card" data-value="html">
                                     <input type="radio" name="formato" value="html" onchange="mudarFormato(this)">
@@ -287,6 +308,12 @@
                 <div class="card">
                     <div class="card-header">
                         <h3>Gerar Crachás</h3>
+                        <div class="header-actions">
+                            <label for="gerarTurma" class="filter-label">Filtrar por turma</label>
+                            <select class="select-filter" id="gerarTurma" onchange="filtrarGeracaoPorTurma()">
+                                <option value="">Todas as turmas</option>
+                            </select>
+                        </div>
                     </div>
                     <div class="card-body">
                         <div class="gerar-info">
@@ -311,6 +338,11 @@
                             </button>
                             <button class="btn btn-outline" onclick="gerarPreview()" id="btnPreview">
                                 👁️ Preview
+                            </button>
+                            <button class="btn btn-outline" onclick="exportarPdfTurma()"
+                                    id="btnPdfTurma" disabled
+                                    title="Selecione uma turma para exportar">
+                                📄 EXPORTAR PDF DA TURMA
                             </button>
                         </div>
 

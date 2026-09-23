@@ -8,3 +8,4 @@ qrcode[pil]>=7.4.0
 # Web API (para interface web moderna)
 flask>=3.0.0
 flask-cors>=4.0.0
+pytest>=8.0.0

@@ -1,5 +1,7 @@
 # Ambiente virtual
 .venv/
+.venv-local/
+.repo-sync/
 
 # Cache do Python
 __pycache__/
@@ -12,8 +14,11 @@ __pycache__/
 # Arquivos gerados pelo sistema
 crachas_montados/
 logs/
-_diag_saida/uploads/
-_diag_saida/previews/
+_diag_saida/
+fotos_alunos/
+fotos_qr_104/
+TurmaCrachas/
+backups/
 
 # Arquivos grandes e desnecessários
 cracharmodeloiema.png

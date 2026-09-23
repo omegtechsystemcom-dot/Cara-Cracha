@@ -80,6 +80,21 @@ class TestPlanilhaReader(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             PlanilhaReader("arquivo_inexistente.xlsx")
 
+    def test_codigo_do_aluno_nao_confunde_com_codigo_da_turma(self):
+        import pandas as pd
+        from cracha_extractor.planilha_reader import PlanilhaReader
+
+        caminho = self.temp_dir / "codigos.xlsx"
+        pd.DataFrame({
+            "Nome": ["ALUNO CÓDIGO"],
+            "Código Turma": [101],
+            "Código do Aluno": [2024001],
+        }).to_excel(caminho, index=False)
+
+        aluno = PlanilhaReader(caminho).ler()[0]
+        self.assertEqual(aluno.turma, "101")
+        self.assertEqual(aluno.matricula, "2024001")
+
 
 class TestQRGenerator(unittest.TestCase):
     """Testes para o gerador de QR Code."""
@@ -100,6 +115,26 @@ class TestQRGenerator(unittest.TestCase):
             caminho = gerador.salvar("Dados do QR", f.name)
             self.assertTrue(Path(caminho).exists())
             self.assertGreater(Path(caminho).stat().st_size, 100)
+
+    def test_qr_do_aluno_usa_codigo_como_identificador_oficial(self):
+        from cracha_extractor.qr_generator import QRCodeGenerator
+        dados = QRCodeGenerator().gerar_para_aluno(
+            "ALUNO TESTE", "101", codigo="2026108617111"
+        )
+        self.assertEqual(dados, "IEMA|V1|COD=2026108617111|TURMA=101")
+
+    def test_qr_do_aluno_exige_codigo(self):
+        from cracha_extractor.qr_generator import QRCodeGenerator
+        with self.assertRaisesRegex(ValueError, "sem codigo oficial"):
+            QRCodeGenerator().gerar_para_aluno("ALUNO TESTE", "101", codigo="")
+
+    def test_dado_personalizado_nao_substitui_codigo_oficial(self):
+        from cracha_extractor.qr_generator import QRCodeGenerator
+        dados = QRCodeGenerator().gerar_para_aluno(
+            "ALUNO TESTE", "101", dados_extras="REFERENCIA EXTERNA", codigo="2024001"
+        )
+        self.assertTrue(dados.startswith("IEMA|V1|COD=2024001|TURMA=101|"))
+        self.assertIn("DADOS=REFERENCIA%20EXTERNA", dados)
 
 
 class TestFotoHandler(unittest.TestCase):
@@ -144,7 +179,7 @@ class TestExportador(unittest.TestCase):
         from cracha_extractor.montador import MontadorCracha
         from cracha_extractor.exportador import ExportadorCracha
 
-        aluno = Aluno(nome="TESTE", turma="102", curso="INFORMÁTICA")
+        aluno = Aluno(nome="TESTE", turma="102", curso="INFORMÁTICA", matricula="2024001")
         config = ConfiguracaoCracha(turma_nome="102")
         montador = MontadorCracha(config)
         exportador = ExportadorCracha(montador)
@@ -159,7 +194,7 @@ class TestExportador(unittest.TestCase):
         from cracha_extractor.montador import MontadorCracha
         from cracha_extractor.exportador import ExportadorCracha
 
-        aluno = Aluno(nome="TESTE", turma="102", curso="INFORMÁTICA")
+        aluno = Aluno(nome="TESTE", turma="102", curso="INFORMÁTICA", matricula="2024001")
         config = ConfiguracaoCracha(turma_nome="102")
         montador = MontadorCracha(config)
         exportador = ExportadorCracha(montador)

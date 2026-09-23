@@ -1,21 +1,25 @@
 @echo off
-title Sistema de Crachás - IEMA
+setlocal
+title Sistema de Crachas - IEMA
 cd /d "%~dp0"
 
 echo ============================================
-echo   SISTEMA DE MONTAGEM DE CRACHÁS
-echo   IEMA - Instituto Estadual de Educação,
-echo   Ciência e Tecnologia do Maranhão
+echo   SISTEMA DE MONTAGEM DE CRACHAS - IEMA
 echo ============================================
 echo.
-echo Iniciando servidor web...
-echo.
 
-.venv\Scripts\python main.py
-
-if %errorlevel% neq 0 (
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start_server.ps1" -Foreground
+if errorlevel 1 (
     echo.
-    echo Erro ao executar! Verifique o ambiente virtual.
-    echo Tente: python -m venv .venv
+    echo [ERRO] Falha ao iniciar o sistema.
     pause
+    exit /b 1
 )
+
+echo.
+echo Sistema carregado em:
+echo http://127.0.0.1:5000/
+echo.
+pause
+
+endlocal

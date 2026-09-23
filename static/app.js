@@ -119,6 +119,7 @@ function mudarAba(aba) {
     // Ações específicas
     if (aba === 'dashboard') carregarDashboard();
     if (aba === 'alunos') renderizarAlunos();
+    if (aba === 'gerar') carregarFiltroGeracao();
     if (aba === 'visualizar') carregarPreviewAlunos();
 
     // Fechar sidebar mobile
@@ -274,11 +275,7 @@ async function confirmarImportacao() {
         document.getElementById('stat-alunos').textContent = data.total;
         document.getElementById('stat-planilha').textContent = '✅';
 
-        // Preencher filtro de turmas
-        const select = document.getElementById('filterTurma');
-        const turmas = [...new Set(STATE.alunos.map(a => a.turma).filter(Boolean))];
-        select.innerHTML = '<option value="">Todas as turmas</option>' +
-            turmas.map(t => `<option value="${t}">${t}</option>`).join('');
+        preencherFiltrosTurma();
 
         // Carregar preview alunos
         carregarPreviewAlunos();
@@ -293,6 +290,42 @@ async function confirmarImportacao() {
 function cancelarImportacao() {
     document.getElementById('previewArea').style.display = 'none';
     document.getElementById('fileInput').value = '';
+}
+
+async function handleFotosSelect(event) {
+    const arquivos = [...event.target.files];
+    if (arquivos.length === 0) return;
+
+    const botao = document.getElementById('btnSelecionarFotos');
+    const status = document.getElementById('fotosUploadStatus');
+    botao.disabled = true;
+    botao.textContent = 'Enviando fotos...';
+    status.textContent = `${arquivos.length} arquivo(s) selecionado(s)`;
+
+    try {
+        let totalSalvas = 0;
+        let totalErros = 0;
+        const tamanhoLote = 20;
+        for (let inicio = 0; inicio < arquivos.length; inicio += tamanhoLote) {
+            const lote = arquivos.slice(inicio, inicio + tamanhoLote);
+            const formData = new FormData();
+            lote.forEach(arquivo => formData.append('fotos', arquivo));
+            status.textContent = `Enviando ${Math.min(inicio + lote.length, arquivos.length)} de ${arquivos.length}...`;
+            const data = await API.upload('/api/fotos', formData);
+            totalSalvas += data.total_salvas;
+            totalErros += data.erros?.length || 0;
+        }
+        status.textContent = `${totalSalvas} foto(s) importada(s)` +
+            (totalErros ? `; ${totalErros} arquivo(s) ignorado(s)` : '');
+        mostrarToast(`✅ ${totalSalvas} foto(s) prontas para os crachás!`, 'success');
+    } catch (err) {
+        status.textContent = err.message;
+        mostrarToast(`❌ ${err.message}`, 'error');
+    } finally {
+        botao.disabled = false;
+        botao.textContent = 'Selecionar Fotos';
+        event.target.value = '';
+    }
 }
 
 // ===== ALUNOS =====
@@ -364,8 +397,51 @@ function selecionarTodos() {
 }
 
 function atualizarGerarInfo() {
-    const total = STATE.alunosSelecionados.size || STATE.alunos.length;
+    const turma = document.getElementById('gerarTurma')?.value || '';
+    let alunos = turma
+        ? STATE.alunos.filter(a => a.turma === turma)
+        : STATE.alunos;
+    if (STATE.alunosSelecionados.size > 0) {
+        alunos = alunos.filter(a => STATE.alunosSelecionados.has(a.nome));
+    }
+    const total = alunos.length;
     document.getElementById('gerar-total').textContent = total;
+    const btnPdfTurma = document.getElementById('btnPdfTurma');
+    if (btnPdfTurma) {
+        const turmaTemAlunos = turma && STATE.alunos.some(a => a.turma === turma);
+        btnPdfTurma.disabled = !turmaTemAlunos;
+        btnPdfTurma.title = turmaTemAlunos
+            ? `Exportar todos os crachás da turma ${turma}`
+            : 'Selecione uma turma para exportar';
+    }
+}
+
+function preencherFiltrosTurma() {
+    const turmas = [...new Set(STATE.alunos.map(a => a.turma).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
+    const opcoes = turmas.map(t => `<option value="${t}">${t}</option>`).join('');
+    const filtroAlunos = document.getElementById('filterTurma');
+    const filtroGeracao = document.getElementById('gerarTurma');
+    if (filtroAlunos) {
+        const valorAtual = filtroAlunos.value;
+        filtroAlunos.innerHTML = '<option value="">Todas as turmas</option>' + opcoes;
+        filtroAlunos.value = turmas.includes(valorAtual) ? valorAtual : '';
+    }
+    if (filtroGeracao) {
+        const valorAtual = filtroGeracao.value;
+        filtroGeracao.innerHTML = '<option value="">Todas as turmas</option>' + opcoes;
+        filtroGeracao.value = turmas.includes(valorAtual) ? valorAtual : '';
+    }
+}
+
+function carregarFiltroGeracao() {
+    preencherFiltrosTurma();
+    atualizarGerarInfo();
+}
+
+function filtrarGeracaoPorTurma() {
+    atualizarGerarInfo();
+    document.getElementById('resultadoGeracao').style.display = 'none';
 }
 
 // ===== CONFIGURAÇÕES =====
@@ -395,6 +471,13 @@ async function gerarCrachas() {
         return;
     }
 
+    const turma = document.getElementById('gerarTurma').value;
+    const total = Number(document.getElementById('gerar-total').textContent);
+    if (total === 0) {
+        mostrarToast('❌ Nenhum aluno corresponde ao filtro selecionado.', 'error');
+        return;
+    }
+
     const btn = document.getElementById('btnGerar');
     btn.disabled = true;
     btn.textContent = '⏳ Gerando...';
@@ -417,6 +500,7 @@ async function gerarCrachas() {
             cor_destaque: STATE.corDestaque,
             mostrar_foto: STATE.mostrarFoto,
             mostrar_qr: STATE.mostrarQR,
+            turma,
             alunos: STATE.alunosSelecionados.size > 0
                 ? [...STATE.alunosSelecionados]
                 : [],
@@ -486,6 +570,70 @@ async function gerarCrachas() {
     } finally {
         btn.disabled = false;
         btn.textContent = '🚀 GERAR CRACHÁS';
+    }
+}
+
+async function exportarPdfTurma() {
+    const turma = document.getElementById('gerarTurma').value;
+    if (!turma) {
+        mostrarToast('❌ Selecione uma turma específica para exportar o PDF.', 'error');
+        return;
+    }
+
+    const btn = document.getElementById('btnPdfTurma');
+    const progressContainer = document.getElementById('progressContainer');
+    const progressFill = document.getElementById('progressFill');
+    const progressText = document.getElementById('progressText');
+    btn.disabled = true;
+    btn.textContent = '⏳ Montando PDF...';
+    progressContainer.style.display = 'block';
+    progressFill.style.width = '25%';
+    progressText.textContent = `Organizando a turma ${turma} em folhas A4...`;
+
+    try {
+        const data = await API.post('/api/exportar-pdf-turma', {
+            turma,
+            cor_destaque: STATE.corDestaque,
+            mostrar_foto: document.getElementById('mostrarFoto').checked,
+            mostrar_qr: document.getElementById('mostrarQR').checked,
+        });
+
+        progressFill.style.width = '100%';
+        progressText.textContent = '✅ PDF pronto para impressão!';
+
+        const link = document.createElement('a');
+        link.href = `${data.download_url}?v=${Date.now()}`;
+        link.download = data.nome_arquivo;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+
+        const resultadoDiv = document.getElementById('resultadoGeracao');
+        resultadoDiv.style.display = 'block';
+        resultadoDiv.innerHTML = `
+            <div class="card" style="border-color: var(--success);">
+                <div class="card-header">
+                    <h3>✅ PDF da turma ${data.turma} gerado!</h3>
+                </div>
+                <div class="card-body">
+                    <p><strong>${data.total_crachas}</strong> crachás em
+                       <strong>${data.total_paginas}</strong> página(s) A4 paisagem.</p>
+                    <p>Tamanho de cada crachá: <strong>${data.tamanho_cracha_mm} mm</strong>.</p>
+                    <p>Arquivo salvo: <code>${data.arquivo}</code></p>
+                    <a class="btn btn-outline" href="${data.download_url}" download="${data.nome_arquivo}">
+                        📥 Baixar novamente
+                    </a>
+                </div>
+            </div>`;
+        mostrarToast(`✅ PDF da turma ${turma} gerado!`, 'success');
+        carregarDashboard();
+    } catch (err) {
+        progressFill.style.width = '0%';
+        progressText.textContent = '❌ Erro ao exportar PDF';
+        mostrarToast(`❌ ${err.message}`, 'error');
+    } finally {
+        btn.textContent = '📄 EXPORTAR PDF DA TURMA';
+        atualizarGerarInfo();
     }
 }
 

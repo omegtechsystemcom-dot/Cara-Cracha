@@ -5,15 +5,17 @@ Exportadores de crachás para diversos formatos:
 - HTML
 """
 import logging
+import math
 from pathlib import Path
 from typing import Optional
 import io
+import unicodedata
 
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 
 from .models import Aluno
 from .montador import MontadorCracha
-from .config import DIRS
+from .config import DIRS, LAYOUT
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +66,129 @@ class ExportadorCracha:
         cracha_img.save(caminho, "PDF", resolution=300)
         logger.info(f"Crachá PDF salvo: {caminho}")
         return caminho
+
+    @staticmethod
+    def _chave_alfabetica(aluno: Aluno) -> str:
+        texto = unicodedata.normalize("NFKD", aluno.nome.casefold())
+        return "".join(c for c in texto if not unicodedata.combining(c))
+
+    @staticmethod
+    def _fonte_impressao(tamanho: int) -> ImageFont.ImageFont:
+        for arquivo in ("arial.ttf", "DejaVuSans.ttf"):
+            try:
+                return ImageFont.truetype(arquivo, tamanho)
+            except OSError:
+                continue
+        return ImageFont.load_default(size=tamanho)
+
+    @staticmethod
+    def _desenhar_marcas_corte(draw: ImageDraw.ImageDraw, x: int, y: int,
+                               largura: int, altura: int):
+        """Desenha marcas fora da arte, sem invadir o cracha."""
+        afastamento = 4
+        comprimento = 12
+        cor = "#555555"
+        for canto_x, direcao_x in ((x, -1), (x + largura, 1)):
+            for canto_y, direcao_y in ((y, -1), (y + altura, 1)):
+                draw.line(
+                    (canto_x + direcao_x * afastamento, canto_y,
+                     canto_x + direcao_x * (afastamento + comprimento), canto_y),
+                    fill=cor, width=1,
+                )
+                draw.line(
+                    (canto_x, canto_y + direcao_y * afastamento,
+                     canto_x, canto_y + direcao_y * (afastamento + comprimento)),
+                    fill=cor, width=1,
+                )
+
+    def montar_folhas_pdf_turma(
+        self,
+        alunos: list[Aluno],
+        turma: str,
+        marcas_corte: bool = True,
+    ) -> list[Image.Image]:
+        """Monta folhas A4 paisagem com 10 crachas de 50 x 85 mm."""
+        if not alunos:
+            raise ValueError("A turma nao possui alunos para exportar.")
+
+        dpi = LAYOUT["DPI"]
+        mm_para_px = lambda mm: round(mm * dpi / 25.4)
+        pagina_w, pagina_h = mm_para_px(297), mm_para_px(210)
+        cracha_w, cracha_h = mm_para_px(50), mm_para_px(85)
+        espaco = mm_para_px(3)
+        colunas, linhas = 5, 2
+        grade_w = colunas * cracha_w + (colunas - 1) * espaco
+        grade_h = linhas * cracha_h + (linhas - 1) * espaco
+        margem_x = (pagina_w - grade_w) // 2
+        margem_y = (pagina_h - grade_h) // 2
+
+        ordenados = sorted(alunos, key=self._chave_alfabetica)
+        folhas = []
+        total_paginas = math.ceil(len(ordenados) / (colunas * linhas))
+        fonte = self._fonte_impressao(24)
+
+        for numero_pagina in range(total_paginas):
+            pagina = Image.new("RGB", (pagina_w, pagina_h), "white")
+            draw = ImageDraw.Draw(pagina)
+            inicio = numero_pagina * colunas * linhas
+            lote = ordenados[inicio:inicio + colunas * linhas]
+
+            for indice, aluno in enumerate(lote):
+                coluna = indice % colunas
+                linha = indice // colunas
+                x = margem_x + coluna * (cracha_w + espaco)
+                y = margem_y + linha * (cracha_h + espaco)
+                cracha = self.montador.montar(aluno).convert("RGB")
+                if cracha.size != (cracha_w, cracha_h):
+                    cracha = cracha.resize((cracha_w, cracha_h), Image.Resampling.LANCZOS)
+                pagina.paste(cracha, (x, y))
+                if marcas_corte:
+                    self._desenhar_marcas_corte(draw, x, y, cracha_w, cracha_h)
+
+            rodape = f"Turma {turma} - Pagina {numero_pagina + 1}/{total_paginas}"
+            caixa = draw.textbbox((0, 0), rodape, font=fonte)
+            texto_x = (pagina_w - (caixa[2] - caixa[0])) // 2
+            texto_y = pagina_h - max(32, margem_y // 3)
+            draw.text((texto_x, texto_y), rodape, fill="#555555", font=fonte)
+            folhas.append(pagina)
+
+        return folhas
+
+    def exportar_pdf_turma(
+        self,
+        alunos: list[Aluno],
+        turma: str,
+        caminho: str | Path,
+        marcas_corte: bool = True,
+    ) -> dict:
+        """Salva um PDF A4 para impressao com todos os crachas da turma."""
+        caminho = Path(caminho)
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        folhas = self.montar_folhas_pdf_turma(alunos, turma, marcas_corte)
+        temporario = caminho.with_name(f"{caminho.stem}.tmp{caminho.suffix}")
+        try:
+            folhas[0].save(
+                temporario,
+                "PDF",
+                save_all=True,
+                append_images=folhas[1:],
+                resolution=LAYOUT["DPI"],
+                quality=95,
+                subsampling=0,
+            )
+            temporario.replace(caminho)
+        finally:
+            if temporario.exists():
+                temporario.unlink()
+            for folha in folhas:
+                folha.close()
+
+        logger.info(f"PDF da turma {turma} salvo: {caminho}")
+        return {
+            "caminho": caminho,
+            "total_crachas": len(alunos),
+            "total_paginas": len(folhas),
+        }
 
     def exportar_html(self, aluno: Aluno, caminho: str | Path) -> Path:
         """Exporta o crachá como HTML."""

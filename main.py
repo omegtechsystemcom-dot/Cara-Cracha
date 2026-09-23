@@ -40,13 +40,13 @@ def _garantir_venv():
         pass
 
     # Reexecuta com o Python do .venv usando subprocess
-    print("🔄 Iniciando com o ambiente virtual (.venv)...")
+    print("Iniciando com o ambiente virtual (.venv)...")
     cmd = [str(venv_python), __file__] + sys.argv[1:]
     try:
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
     except Exception as e:
-        print(f"❌ Erro ao executar com .venv: {e}")
+        print(f"[ERRO] Erro ao executar com .venv: {e}")
         print("Execute manualmente: .venv\\Scripts\\python main.py")
         sys.exit(1)
 from pathlib import Path
@@ -129,7 +129,7 @@ Exemplos:
         print("\n=== DIAGNÓSTICO DO SISTEMA ===\n")
         print("Estrutura de Diretórios:")
         for nome, info in estrutura.items():
-            status = "✅" if info["existe"] else "❌"
+            status = "[OK]" if info["existe"] else "[ERRO]"
             print(f"  {status} {nome}: {info['caminho']}")
 
         turmas = diag.listar_turmas_disponiveis()
@@ -145,7 +145,7 @@ Exemplos:
     if args.backup:
         from cracha_extractor.utils import criar_backup
         caminho = criar_backup()
-        print(f"✅ Backup criado em: {caminho}")
+        print(f"[OK] Backup criado em: {caminho}")
         return
 
     # Modo exemplo
@@ -153,7 +153,7 @@ Exemplos:
         from cracha_extractor.utils import criar_arquivo_exemplo
         caminho = Path("modelo_alunos.xlsx")
         criar_arquivo_exemplo(caminho)
-        print(f"✅ Arquivo exemplo criado: {caminho.resolve()}")
+        print(f"[OK] Arquivo exemplo criado: {caminho.resolve()}")
         return
 
     # Modo CLI
@@ -165,28 +165,28 @@ Exemplos:
         from cracha_extractor.config import DIRS
 
         if not args.planilha:
-            print("❌ Use --planilha para especificar o arquivo de dados.")
+            print("[ERRO] Use --planilha para especificar o arquivo de dados.")
             sys.exit(1)
 
         planilha = Path(args.planilha)
         if not planilha.exists():
-            print(f"❌ Planilha não encontrada: {planilha}")
+            print(f"[ERRO] Planilha nao encontrada: {planilha}")
             sys.exit(1)
 
         pasta_saida = Path(args.saida) if args.saida else DIRS["MONTADOS"]
 
-        print(f"📂 Lendo planilha: {planilha}")
+        print(f"Lendo planilha: {planilha}")
         reader = PlanilhaReader(planilha)
         alunos = reader.ler()
-        print(f"✅ {len(alunos)} alunos carregados")
+        print(f"[OK] {len(alunos)} alunos carregados")
 
         config = ConfiguracaoCracha(turma_nome="")
         montador = MontadorCracha(config)
         exportador = ExportadorCracha(montador)
 
-        print(f"🚀 Gerando crachás em: {pasta_saida}")
+        print(f"Gerando crachas em: {pasta_saida}")
         resultados = exportador.exportar_lote(alunos, pasta_saida, [args.formato])
-        print(f"✅ {len(resultados[args.formato])} crachás gerados em {args.formato.upper()}")
+        print(f"[OK] {len(resultados[args.formato])} crachas gerados em {args.formato.upper()}")
         return
 
     # Modo GUI Tkinter (se solicitado explicitamente)
@@ -201,16 +201,14 @@ Exemplos:
     from cracha_extractor.api import iniciar_servidor
 
     url = f"http://{args.host}:{args.port}"
-    print(f"""
-╔══════════════════════════════════════════════╗
-║     SISTEMA DE MONTAGEM DE CRACHÁS          ║
-║     Interface Web                            ║
-║                                              ║
-║  🌐 Acesse: {url}              ║
-║                                              ║
-║  Pressione Ctrl+C para parar o servidor      ║
-╚══════════════════════════════════════════════╝
-    """)
+    print("")
+    print("==============================================")
+    print("  SISTEMA DE MONTAGEM DE CRACHAS")
+    print("  Interface Web")
+    print(f"  Acesse: {url}")
+    print("  Pressione Ctrl+C para parar o servidor")
+    print("==============================================")
+    print("")
 
     # Abrir navegador automaticamente
     webbrowser.open(url)

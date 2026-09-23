@@ -112,6 +112,10 @@ class Diagnosticador:
         if pasta_montados.exists():
             for item in pasta_montados.rglob("*"):
                 if item.is_file() and item.suffix.lower() in [".png", ".jpg", ".pdf", ".html"]:
+                    if (item.suffix.lower() == ".pdf"
+                            and item.stem.startswith("Turma_")
+                            and item.stem.endswith("_Crachas")):
+                        continue
                     # Extrair nome do aluno do nome do arquivo (sem extensão, substituindo _ por espaço)
                     nome_arquivo = item.stem
                     nome_aluno = nome_arquivo.replace("_", " ").strip()

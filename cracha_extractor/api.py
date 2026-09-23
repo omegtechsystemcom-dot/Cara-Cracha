@@ -2,26 +2,35 @@
 API Flask para servir o frontend web e processar requisições.
 """
 import logging
-import json
 import base64
 import io
+import uuid
 from pathlib import Path
-from typing import Optional
+from urllib.parse import quote
 
 from flask import Flask, request, jsonify, send_file, send_from_directory
-from flask_cors import CORS
+from PIL import Image, UnidentifiedImageError
+from werkzeug.utils import secure_filename
 
-from .config import DIRS, FORMATOS_SAIDA
+try:
+    from flask_cors import CORS
+except ImportError:
+    CORS = None
+
+from .config import BASE_DIR, DIRS, EXTENSOES_PLANILHA, FORMATOS_SAIDA
 from .planilha_reader import PlanilhaReader
 from .montador import MontadorCracha
 from .exportador import ExportadorCracha
 from .models import Aluno, ConfiguracaoCracha
+from .qr_generator import QRCodeGenerator
 from .utils import Diagnosticador, criar_backup, criar_arquivo_exemplo
 
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__, static_folder=None)
-CORS(app)
+app.config["MAX_CONTENT_LENGTH"] = 100 * 1024 * 1024
+if CORS is not None:
+    CORS(app, origins=["http://127.0.0.1:5000", "http://localhost:5000"])
 
 # Estado da aplicação (em memória)
 app_state = {
@@ -31,7 +40,25 @@ app_state = {
 }
 
 # Caminho padrão da planilha IEMA
-PLANILHA_PADRAO = Path(r"D:\codigo-pyton\CRACHA IMPRIMIR\alunosiema.xlsx")
+PLANILHA_PADRAO = BASE_DIR / "alunosiema.xlsx"
+EXTENSOES_FOTO = {".jpg", ".jpeg", ".png", ".gif", ".bmp"}
+
+
+def _validar_codigos_qr(alunos):
+    """Retorna inconsistencias que impedem QRs univocos."""
+    sem_codigo = []
+    por_codigo = {}
+    for aluno in alunos:
+        codigo = QRCodeGenerator.normalizar_codigo(aluno.matricula)
+        if not codigo:
+            sem_codigo.append(aluno.nome)
+            continue
+        por_codigo.setdefault(codigo, []).append(aluno.nome)
+
+    duplicados = {
+        codigo: nomes for codigo, nomes in por_codigo.items() if len(nomes) > 1
+    }
+    return sem_codigo, duplicados
 
 
 # ========== ROTAS DA API ==========
@@ -40,6 +67,47 @@ PLANILHA_PADRAO = Path(r"D:\codigo-pyton\CRACHA IMPRIMIR\alunosiema.xlsx")
 def health():
     """Health check da API."""
     return jsonify({"status": "ok", "versao": "2.0.0"})
+
+
+@app.route("/api/fotos", methods=["POST"])
+def enviar_fotos():
+    """Recebe fotos e as disponibiliza para associação automática por nome."""
+    arquivos = request.files.getlist("fotos")
+    if not arquivos or not any(arquivo.filename for arquivo in arquivos):
+        return jsonify({"erro": "Nenhuma foto enviada."}), 400
+
+    salvas = []
+    erros = []
+    pasta = DIRS["FOTOS_ALUNOS"]
+    pasta.mkdir(parents=True, exist_ok=True)
+
+    for arquivo in arquivos:
+        nome = secure_filename(arquivo.filename or "")
+        extensao = Path(nome).suffix.lower()
+        if not nome or extensao not in EXTENSOES_FOTO:
+            erros.append({"arquivo": arquivo.filename, "erro": "Formato de imagem não aceito."})
+            continue
+
+        conteudo = arquivo.read()
+        try:
+            Image.open(io.BytesIO(conteudo)).verify()
+        except (UnidentifiedImageError, OSError):
+            erros.append({"arquivo": arquivo.filename, "erro": "Arquivo de imagem inválido."})
+            continue
+
+        destino = pasta / nome
+        destino.write_bytes(conteudo)
+        salvas.append(nome)
+
+    if not salvas:
+        return jsonify({"erro": "Nenhuma foto válida foi enviada.", "erros": erros}), 400
+
+    return jsonify({
+        "total_salvas": len(salvas),
+        "fotos": salvas,
+        "erros": erros,
+        "pasta": str(pasta),
+    })
 
 
 @app.route("/api/planilha-padrao", methods=["POST"])
@@ -108,8 +176,8 @@ def preview_planilha():
     if not arquivo:
         return jsonify({"erro": "Nenhum arquivo enviado"}), 400
 
-    caminho = _salvar_temporario(arquivo)
     try:
+        caminho = _salvar_temporario(arquivo)
         reader = PlanilhaReader(caminho)
         colunas = reader.listar_colunas()
         alunos = reader.ler()
@@ -191,6 +259,7 @@ def gerar_crachas():
     cor_destaque = data.get("cor_destaque", "#1a5276")
     mostrar_foto = data.get("mostrar_foto", True)
     mostrar_qr = data.get("mostrar_qr", True)
+    turma = str(data.get("turma", "")).strip()
     selecionados = data.get("alunos", [])  # Lista de nomes, vazio = todos
 
     if formato not in FORMATOS_SAIDA:
@@ -198,8 +267,33 @@ def gerar_crachas():
 
     # Filtrar alunos se necessário
     alunos_gerar = alunos
+    if turma:
+        alunos_gerar = [a for a in alunos_gerar if a.turma == turma]
     if selecionados:
-        alunos_gerar = [a for a in alunos if a.nome in selecionados]
+        alunos_gerar = [a for a in alunos_gerar if a.nome in selecionados]
+
+    if not alunos_gerar:
+        return jsonify({"erro": "Nenhum aluno corresponde aos filtros selecionados."}), 400
+
+    if mostrar_qr:
+        sem_codigo, duplicados = _validar_codigos_qr(alunos_gerar)
+        if sem_codigo or duplicados:
+            detalhes = []
+            if sem_codigo:
+                detalhes.append(
+                    f"{len(sem_codigo)} aluno(s) sem codigo: {', '.join(sem_codigo[:5])}"
+                )
+            if duplicados:
+                exemplos = ", ".join(
+                    f"{codigo} ({'/'.join(nomes[:3])})"
+                    for codigo, nomes in list(duplicados.items())[:5]
+                )
+                detalhes.append(f"codigo(s) duplicado(s): {exemplos}")
+            return jsonify({
+                "erro": "Nao foi possivel gerar os QR Codes. " + "; ".join(detalhes),
+                "sem_codigo": sem_codigo,
+                "codigos_duplicados": duplicados,
+            }), 400
 
     config = ConfiguracaoCracha(
         turma_nome="",
@@ -233,6 +327,11 @@ def gerar_crachas():
             resultados.append({
                 "nome": aluno.nome,
                 "turma": aluno.turma,
+                "codigo": aluno.matricula,
+                "qr_identificador": (
+                    f"IEMA|V1|COD={QRCodeGenerator.normalizar_codigo(aluno.matricula)}"
+                    if mostrar_qr else None
+                ),
                 "arquivo": str(caminho),
                 "formato": formato,
                 "tamanho_kb": round(caminho.stat().st_size / 1024, 1),
@@ -250,6 +349,59 @@ def gerar_crachas():
     })
 
 
+@app.route("/api/exportar-pdf-turma", methods=["POST"])
+def exportar_pdf_turma():
+    """Gera uma folha A4 de impressao para a turma selecionada."""
+    data = request.get_json() or {}
+    turma = str(data.get("turma", "")).strip()
+    if not turma:
+        return jsonify({"erro": "Selecione uma turma especifica para exportar o PDF."}), 400
+
+    alunos = [a for a in app_state["alunos"] if a.turma == turma]
+    if not alunos:
+        return jsonify({"erro": f"Nenhum aluno encontrado na turma {turma}."}), 404
+
+    mostrar_qr = data.get("mostrar_qr", True)
+    if mostrar_qr:
+        sem_codigo, duplicados = _validar_codigos_qr(alunos)
+        if sem_codigo or duplicados:
+            return jsonify({
+                "erro": "Corrija os codigos vazios ou duplicados antes de exportar o PDF.",
+                "sem_codigo": sem_codigo,
+                "codigos_duplicados": duplicados,
+            }), 400
+
+    config = ConfiguracaoCracha(
+        turma_nome=turma,
+        cor_destaque=data.get("cor_destaque", "#1a5276"),
+        mostrar_foto=data.get("mostrar_foto", True),
+        mostrar_qr_code=mostrar_qr,
+    )
+    exportador = ExportadorCracha(MontadorCracha(config))
+    pasta_nome = exportador._sanitizar_nome(turma)
+    nome_arquivo = f"Turma_{pasta_nome}_Crachas.pdf"
+    caminho = DIRS["MONTADOS"] / pasta_nome / nome_arquivo
+
+    try:
+        resultado = exportador.exportar_pdf_turma(alunos, turma, caminho)
+    except Exception as e:
+        logger.error(f"Erro ao exportar PDF da turma {turma}: {e}")
+        return jsonify({"erro": str(e)}), 500
+
+    return jsonify({
+        "turma": turma,
+        "arquivo": str(resultado["caminho"]),
+        "nome_arquivo": nome_arquivo,
+        "download_url": (
+            f"/crachas/{quote(pasta_nome, safe='')}/{quote(nome_arquivo, safe='')}"
+        ),
+        "total_crachas": resultado["total_crachas"],
+        "total_paginas": resultado["total_paginas"],
+        "tamanho_cracha_mm": "50 x 85",
+        "folha": "A4 paisagem",
+    })
+
+
 @app.route("/api/gerar/preview", methods=["POST"])
 def gerar_preview():
     """Gera preview de um crachá específico e retorna como base64."""
@@ -259,6 +411,9 @@ def gerar_preview():
     aluno = next((a for a in app_state["alunos"] if a.nome == nome), None)
     if not aluno:
         return jsonify({"erro": "Aluno não encontrado"}), 404
+
+    if data.get("mostrar_qr", True) and not QRCodeGenerator.normalizar_codigo(aluno.matricula):
+        return jsonify({"erro": f"Aluno sem codigo oficial: {aluno.nome}"}), 400
 
     config = ConfiguracaoCracha(
         turma_nome=aluno.turma,
@@ -347,6 +502,23 @@ def _salvar_temporario(arquivo) -> Path:
     pasta_temp = DIRS["DIAG_SAIDA"] / "uploads"
     pasta_temp.mkdir(parents=True, exist_ok=True)
     caminho = pasta_temp / arquivo.filename
+    arquivo.save(caminho)
+    return caminho
+
+
+def _salvar_temporario(arquivo) -> Path:
+    """Salva arquivo enviado em diretorio temporario com nome seguro."""
+    pasta_temp = DIRS["DIAG_SAIDA"] / "uploads"
+    pasta_temp.mkdir(parents=True, exist_ok=True)
+    nome_seguro = secure_filename(arquivo.filename or "")
+    extensao = Path(nome_seguro).suffix.lower()
+    if extensao not in EXTENSOES_PLANILHA:
+        raise ValueError(
+            f"Extensao nao suportada: {extensao or 'sem extensao'}. "
+            f"Use: {', '.join(EXTENSOES_PLANILHA)}"
+        )
+
+    caminho = pasta_temp / f"{Path(nome_seguro).stem}_{uuid.uuid4().hex[:8]}{extensao}"
     arquivo.save(caminho)
     return caminho
 

@@ -11,6 +11,7 @@ BASE_DIR = Path(__file__).parent.parent.resolve()
 DIRS = {
     "TURMAS": BASE_DIR / "TurmaCrachas",
     "MONTADOS": BASE_DIR / "crachas_montados",
+    "FOTOS_ALUNOS": BASE_DIR / "fotos_alunos",
     "FOTOS_QR": BASE_DIR / "fotos_qr_104",
     "STATIC": BASE_DIR / "static",
     "LOGS": BASE_DIR / "logs",
@@ -52,16 +53,16 @@ STYLE = {
 
 # Template de fundo do IEMA
 TEMPLATE_IEMA = {
-    "ARQUIVO": "static/fundo_iema.png",
+    "ARQUIVO": "ModeloCrachaIema.png",
     "LARGURA_PX": 591,
     "ALTURA_PX": 1004,
     # Posições em pixels (para 591x1004)
     "POS_LOGO": (40, 5, 551, 55),      # (x1, y1, x2, y2) - espaço do logo
-    "POS_FOTO": (140, 70, 451, 430),   # espaço da foto (centralizado)
-    "POS_CURSO": (40, 440, 551, 480),  # faixa verde - curso
-    "POS_NOME": (40, 490, 551, 600),   # nome do aluno
-    "POS_QR": (200, 620, 391, 811),    # QR code (centralizado)
-    "POS_TURMA": (40, 820, 551, 880),  # faixa verde 2 - turma
+    "POS_FOTO": (143, 155, 481, 493), # interior do quadro superior
+    "POS_CURSO": (55, 546, 536, 567),
+    "POS_NOME": (55, 501, 536, 544),
+    "POS_QR": (143, 576, 462, 895),   # interior do quadro inferior
+    "POS_TURMA": (137, 903, 469, 933), # substitui a legenda Qrcode
     "POS_INFO": (40, 890, 551, 930),   # informações adicionais
     "POS_RODAPE": (40, 940, 551, 980), # faixa rosa - rodapé IEMA
 }

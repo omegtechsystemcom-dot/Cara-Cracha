@@ -21,8 +21,11 @@ class Aluno:
     cpf: Optional[str] = None
 
     def __post_init__(self):
-        self.nome = self.nome.strip().upper() if self.nome else ""
-        self.turma = self.turma.strip().upper() if self.turma else ""
+        self.nome = str(self.nome).strip().upper() if self.nome else ""
+        self.turma = str(self.turma).strip().upper() if self.turma else ""
+        self.matricula = str(self.matricula).strip() if self.matricula else ""
+        if self.matricula.endswith(".0") and self.matricula[:-2].isdigit():
+            self.matricula = self.matricula[:-2]
 
 
 @dataclass

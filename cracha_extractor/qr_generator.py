@@ -4,6 +4,7 @@ Gerador de QR Codes para os crachás.
 import logging
 from pathlib import Path
 from typing import Optional
+from urllib.parse import quote
 
 import qrcode
 from qrcode.image.pil import PilImage
@@ -59,12 +60,35 @@ class QRCodeGenerator:
         logger.info(f"QR Code salvo: {caminho}")
         return caminho
 
-    def gerar_para_aluno(self, nome: str, turma: str, dados_extras: Optional[str] = None) -> str:
+    @staticmethod
+    def normalizar_codigo(codigo: object) -> str:
+        """Normaliza o identificador sem alterar zeros significativos."""
+        codigo_normalizado = str(codigo).strip() if codigo is not None else ""
+        if codigo_normalizado.endswith(".0") and codigo_normalizado[:-2].isdigit():
+            codigo_normalizado = codigo_normalizado[:-2]
+        return codigo_normalizado.upper()
+
+    def gerar_para_aluno(
+        self,
+        nome: str,
+        turma: str,
+        dados_extras: Optional[str] = None,
+        codigo: object = None,
+    ) -> str:
         """
         Gera os dados para o QR Code de um aluno.
         Pode conter um link, matrícula, ou informações personalizadas.
         """
-        if dados_extras:
-            return dados_extras
-        # Dados padrão: nome e turma
-        return f"Nome: {nome}\nTurma: {turma}"
+        codigo_normalizado = self.normalizar_codigo(codigo)
+        if not codigo_normalizado:
+            raise ValueError(f"Aluno sem codigo oficial: {nome}")
+
+        partes = [
+            "IEMA",
+            "V1",
+            f"COD={quote(codigo_normalizado, safe='-_.')}",
+            f"TURMA={quote(str(turma).strip().upper(), safe='-_.')}",
+        ]
+        if dados_extras and str(dados_extras).strip():
+            partes.append(f"DADOS={quote(str(dados_extras).strip(), safe='-_.:/')}")
+        return "|".join(partes)

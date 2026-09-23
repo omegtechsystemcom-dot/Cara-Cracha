@@ -368,6 +368,16 @@ body {
     background: var(--primary-bg);
 }
 
+.upload-zone-compact {
+    padding: 1.75rem 1.25rem;
+}
+
+.upload-status {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    margin-top: 0.75rem;
+}
+
 .upload-icon { font-size: 3rem; margin-bottom: 0.75rem; }
 .upload-text { font-size: 1rem; font-weight: 500; margin-bottom: 0.25rem; }
 .upload-hint { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 1rem; }
@@ -441,6 +451,12 @@ body {
 .select-filter:focus {
     outline: none;
     border-color: var(--primary);
+}
+
+.filter-label {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+    font-weight: 600;
 }
 
 .header-actions {
