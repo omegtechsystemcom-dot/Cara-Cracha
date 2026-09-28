@@ -65,6 +65,7 @@ class MontadorCracha:
         draw.multiline_text((x, y), conteudo, font=fonte, fill=cor, align="center", spacing=2)
 
     def montar(self, aluno: Aluno) -> Image.Image:
+        self.foto_handler.ultima_foto_caminho = None
         cracha = self._criar_fundo_iema()
         draw = ImageDraw.Draw(cracha)
         fundo = cracha.getpixel((80, 520))

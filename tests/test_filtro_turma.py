@@ -62,8 +62,30 @@ def test_menu_gerar_exibe_filtro_de_turma():
     html = (api.BASE_DIR / "static" / "index.html").read_text(encoding="utf-8")
     javascript = (api.BASE_DIR / "static" / "app.js").read_text(encoding="utf-8")
     assert 'id="gerarTurma"' in html
-    assert "filtrarGeracaoPorTurma()" in html
+    assert "porId('gerarTurma').addEventListener('change', filtrarGeracaoPorTurma)" in javascript
+    assert "onchange=" not in html
     assert "turma," in javascript
+    assert 'id="crachasFiltradosConteudo"' in html
+    assert "carregarCrachasDaTurma()" in javascript
+
+
+def test_api_lista_crachas_filtrados_por_turma(tmp_path, monkeypatch):
+    monkeypatch.setitem(api.DIRS, "MONTADOS", tmp_path)
+    pasta_101 = tmp_path / "101"
+    pasta_202 = tmp_path / "202"
+    pasta_101.mkdir()
+    pasta_202.mkdir()
+    (pasta_101 / "ALUNO_UM.png").write_bytes(b"png")
+    (pasta_202 / "ALUNO_DOIS.png").write_bytes(b"png")
+
+    resposta = api.app.test_client().get("/api/crachas?turma=101")
+
+    assert resposta.status_code == 200
+    dados = resposta.get_json()
+    assert dados["turma"] == "101"
+    assert dados["total"] == 1
+    assert dados["crachas"][0]["nome"] == "ALUNO UM"
+    assert dados["crachas"][0]["url"] == "/crachas/101/ALUNO_UM.png"
 
 
 def test_api_bloqueia_qr_com_codigo_ausente_ou_duplicado(tmp_path, monkeypatch):

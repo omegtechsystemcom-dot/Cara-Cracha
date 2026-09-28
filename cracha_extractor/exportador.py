@@ -208,7 +208,9 @@ class ExportadorCracha:
         pasta = Path(pasta)
         pasta.mkdir(parents=True, exist_ok=True)
 
-        nome_base = self._sanitizar_nome(aluno.nome)
+        if not aluno.matricula:
+            raise ValueError(f"Aluno sem código oficial: {aluno.nome}")
+        nome_base = self._sanitizar_nome(aluno.matricula)
         resultados = {}
 
         for fmt in formatos:

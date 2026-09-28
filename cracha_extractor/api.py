@@ -3,8 +3,14 @@ API Flask para servir o frontend web e processar requisições.
 """
 import logging
 import base64
+import hashlib
 import io
+import json
+import os
+import shutil
 import uuid
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 
@@ -18,12 +24,20 @@ except ImportError:
     CORS = None
 
 from .config import BASE_DIR, DIRS, EXTENSOES_PLANILHA, FORMATOS_SAIDA
+from . import __version__
+from .estado import carregar_estado_planilha, salvar_estado_planilha
 from .planilha_reader import PlanilhaReader
 from .montador import MontadorCracha
 from .exportador import ExportadorCracha
-from .models import Aluno, ConfiguracaoCracha
+from .models import ConfiguracaoCracha
 from .qr_generator import QRCodeGenerator
-from .utils import Diagnosticador, criar_backup, criar_arquivo_exemplo
+from .integridade import auditar_fotos, contar_arquivos_foto
+from .utils import (
+    Diagnosticador,
+    criar_backup,
+    criar_arquivo_exemplo,
+    validar_backup,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +51,75 @@ app_state = {
     "alunos": [],
     "turmas": {},
     "planilha_carregada": None,
+    "planilha_confirmada_em": None,
+    "importacoes_pendentes": {},
 }
 
 # Caminho padrão da planilha IEMA
 PLANILHA_PADRAO = BASE_DIR / "alunosiema.xlsx"
 EXTENSOES_FOTO = {".jpg", ".jpeg", ".png", ".gif", ".bmp"}
+
+
+@app.after_request
+def adicionar_cabecalhos_seguranca(resposta):
+    resposta.headers["X-Content-Type-Options"] = "nosniff"
+    resposta.headers["X-Frame-Options"] = "DENY"
+    resposta.headers["Referrer-Policy"] = "no-referrer"
+    resposta.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self'; img-src 'self' data:; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; connect-src 'self'; "
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+    )
+    return resposta
+
+
+def _serializar_aluno(aluno):
+    return {
+        "codigo": aluno.matricula,
+        "matricula": aluno.matricula,
+        "nome": aluno.nome,
+        "turma": aluno.turma,
+        "curso": aluno.curso,
+        "observacao": aluno.observacao,
+    }
+
+
+def _ativar_planilha(caminho: Path, alunos=None, reader=None):
+    reader = reader or PlanilhaReader(caminho)
+    alunos = alunos if alunos is not None else reader.ler()
+    turmas = reader.agrupar_por_turma(alunos)
+    estado = salvar_estado_planilha(caminho)
+    app_state["alunos"] = alunos
+    app_state["turmas"] = turmas
+    app_state["planilha_carregada"] = str(Path(caminho).resolve())
+    app_state["planilha_confirmada_em"] = estado["confirmada_em"]
+    return turmas
+
+
+def _restaurar_estado_inicial():
+    restaurado = carregar_estado_planilha()
+    if not restaurado:
+        return
+    alunos, turmas, estado = restaurado
+    app_state["alunos"] = alunos
+    app_state["turmas"] = turmas
+    app_state["planilha_carregada"] = estado["planilha"]
+    app_state["planilha_confirmada_em"] = estado.get("confirmada_em")
+
+
+def _limpar_importacoes_pendentes():
+    """Remove uploads órfãos de uma execução anterior do servidor."""
+    pasta = DIRS["IMPORTACOES_PENDENTES"]
+    if not pasta.is_dir():
+        return
+    for arquivo in pasta.iterdir():
+        if arquivo.is_file():
+            arquivo.unlink(missing_ok=True)
+
+
+_limpar_importacoes_pendentes()
+_restaurar_estado_inicial()
 
 
 def _validar_codigos_qr(alunos):
@@ -61,12 +139,101 @@ def _validar_codigos_qr(alunos):
     return sem_codigo, duplicados
 
 
+def _hash_opcional(caminho) -> str | None:
+    if not caminho:
+        return None
+    arquivo = Path(caminho)
+    if not arquivo.is_file():
+        return None
+    digest = hashlib.sha256()
+    with arquivo.open("rb") as stream:
+        for bloco in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(bloco)
+    return digest.hexdigest()
+
+
+def _carregar_manifesto(pasta: Path) -> dict:
+    caminho = pasta / "manifesto.json"
+    if caminho.is_file():
+        try:
+            return json.loads(caminho.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            pass
+    return {"versao": 1, "turma": pasta.name, "crachas": []}
+
+
+def _salvar_manifesto(pasta: Path, entradas: list[dict]) -> Path:
+    manifesto = _carregar_manifesto(pasta)
+    existentes = {
+        (item.get("codigo"), item.get("formato")): item
+        for item in manifesto.get("crachas", [])
+    }
+    for entrada in entradas:
+        existentes[(entrada["codigo"], entrada["formato"])] = entrada
+    manifesto.update({
+        "versao": 1,
+        "turma": pasta.name,
+        "atualizado_em": datetime.now().isoformat(timespec="seconds"),
+        "crachas": sorted(
+            existentes.values(), key=lambda item: (item.get("nome", ""), item.get("formato", ""))
+        ),
+    })
+    destino = pasta / "manifesto.json"
+    temporario = pasta / ".manifesto.tmp"
+    temporario.write_text(
+        json.dumps(manifesto, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    temporario.replace(destino)
+    return destino
+
+
+def _reconciliar_turma(turma: str) -> dict:
+    alunos = [aluno for aluno in app_state["alunos"] if aluno.turma == turma]
+    pasta = DIRS["MONTADOS"] / ExportadorCracha._sanitizar_nome(turma)
+    formatos = {".png", ".jpg", ".pdf", ".html"}
+    arquivos = []
+    if pasta.is_dir():
+        arquivos = [
+            item for item in pasta.iterdir()
+            if item.is_file() and item.suffix.lower() in formatos
+            and not (item.suffix.lower() == ".pdf" and item.stem.startswith("Turma_"))
+        ]
+    esperados = {}
+    stems_validos = set()
+    for aluno in alunos:
+        codigo = ExportadorCracha._sanitizar_nome(
+            QRCodeGenerator.normalizar_codigo(aluno.matricula)
+        )
+        esperados[aluno.matricula] = codigo
+        stems_validos.add(codigo)
+    stems_atuais = {arquivo.stem for arquivo in arquivos}
+    faltantes = [
+        {"codigo": aluno.matricula, "nome": aluno.nome}
+        for aluno in alunos
+        if esperados[aluno.matricula] not in stems_atuais
+    ]
+    obsoletos = [
+        {"arquivo": arquivo.name, "caminho": str(arquivo)}
+        for arquivo in arquivos if arquivo.stem not in stems_validos
+    ]
+    return {
+        "turma": turma,
+        "total_alunos": len(alunos),
+        "total_arquivos": len(arquivos),
+        "faltantes": faltantes,
+        "obsoletos": obsoletos,
+        "total_faltantes": len(faltantes),
+        "total_obsoletos": len(obsoletos),
+        "valido": not faltantes and not obsoletos,
+    }
+
+
 # ========== ROTAS DA API ==========
 
 @app.route("/api/health")
 def health():
     """Health check da API."""
-    return jsonify({"status": "ok", "versao": "2.0.0"})
+    return jsonify({"status": "ok", "versao": __version__})
 
 
 @app.route("/api/fotos", methods=["POST"])
@@ -78,6 +245,8 @@ def enviar_fotos():
 
     salvas = []
     erros = []
+    conflitos = []
+    substituir = str(request.form.get("substituir", "false")).lower() == "true"
     pasta = DIRS["FOTOS_ALUNOS"]
     pasta.mkdir(parents=True, exist_ok=True)
 
@@ -96,16 +265,26 @@ def enviar_fotos():
             continue
 
         destino = pasta / nome
+        if destino.exists() and not substituir:
+            conflitos.append(nome)
+            erros.append({"arquivo": arquivo.filename, "erro": "Arquivo já existe."})
+            continue
         destino.write_bytes(conteudo)
         salvas.append(nome)
 
     if not salvas:
-        return jsonify({"erro": "Nenhuma foto válida foi enviada.", "erros": erros}), 400
+        status = 409 if conflitos else 400
+        return jsonify({
+            "erro": "Nenhuma foto foi salva.",
+            "erros": erros,
+            "conflitos": conflitos,
+        }), status
 
     return jsonify({
         "total_salvas": len(salvas),
         "fotos": salvas,
         "erros": erros,
+        "conflitos": conflitos,
         "pasta": str(pasta),
     })
 
@@ -134,10 +313,7 @@ def carregar_planilha_padrao():
 
         turmas = reader.agrupar_por_turma(alunos)
 
-        # Salvar no estado
-        app_state["alunos"] = alunos
-        app_state["turmas"] = turmas
-        app_state["planilha_carregada"] = str(caminho)
+        _ativar_planilha(caminho, alunos=alunos, reader=reader)
 
         return jsonify({
             "total_alunos": len(alunos),
@@ -160,24 +336,37 @@ def diagnostico():
     estrutura = diag.verificar_estrutura()
     turmas = diag.listar_turmas_disponiveis()
     crachas = diag.listar_crachas_montados()
+    turmas_ativas = sorted(app_state["turmas"])
+    reconciliacao = [
+        _reconciliar_turma(turma) for turma in turmas_ativas
+    ] if app_state["alunos"] else []
 
     return jsonify({
         "estrutura": {k: v for k, v in estrutura.items()},
-        "turmas": turmas,
+        "turmas": turmas_ativas or turmas,
         "crachas_montados": crachas,
         "total_crachas": len(crachas),
+        "total_alunos": len(app_state["alunos"]),
+        "total_turmas": len(turmas_ativas),
+        "planilha_carregada": app_state["planilha_carregada"],
+        "planilha_confirmada_em": app_state["planilha_confirmada_em"],
+        "reconciliacao": reconciliacao,
+        "total_faltantes": sum(len(item["faltantes"]) for item in reconciliacao),
+        "total_obsoletos": sum(len(item["obsoletos"]) for item in reconciliacao),
     })
 
 
 @app.route("/api/planilha/colunas", methods=["POST"])
 def preview_planilha():
-    """Lê uma planilha e retorna preview das colunas e dados."""
+    """Cria uma importação pendente sem alterar a planilha ativa."""
     arquivo = request.files.get("arquivo")
     if not arquivo:
         return jsonify({"erro": "Nenhum arquivo enviado"}), 400
 
+    caminho = None
     try:
-        caminho = _salvar_temporario(arquivo)
+        upload_id = uuid.uuid4().hex
+        caminho = _salvar_temporario(arquivo, upload_id)
         reader = PlanilhaReader(caminho)
         colunas = reader.listar_colunas()
         alunos = reader.ler()
@@ -201,10 +390,12 @@ def preview_planilha():
             for nome, t in turmas.items()
         }
 
-        # Salvar no estado
-        app_state["alunos"] = alunos
-        app_state["turmas"] = turmas
-        app_state["planilha_carregada"] = str(caminho)
+        app_state["importacoes_pendentes"][upload_id] = {
+            "caminho": caminho,
+            "alunos": alunos,
+            "turmas": turmas,
+            "reader": reader,
+        }
 
         return jsonify({
             "total_alunos": len(alunos),
@@ -213,10 +404,57 @@ def preview_planilha():
             "colunas_planilha": colunas,
             "turmas": {nome: len(t.alunos) for nome, t in turmas.items()},
             "preview": preview,
+            "upload_id": upload_id,
         })
     except Exception as e:
+        if caminho:
+            Path(caminho).unlink(missing_ok=True)
         logger.error(f"Erro ao ler planilha: {e}")
         return jsonify({"erro": str(e)}), 400
+
+
+@app.route("/api/planilha/confirmar", methods=["POST"])
+def confirmar_planilha():
+    """Promove uma importação pendente para planilha ativa."""
+    upload_id = str((request.get_json() or {}).get("upload_id", "")).strip()
+    pendente = app_state["importacoes_pendentes"].pop(upload_id, None)
+    if not pendente:
+        return jsonify({"erro": "Importação pendente não encontrada ou expirada."}), 404
+
+    sem_codigo, duplicados = _validar_codigos_qr(pendente["alunos"])
+    if sem_codigo or duplicados:
+        app_state["importacoes_pendentes"][upload_id] = pendente
+        return jsonify({
+            "erro": "A planilha possui códigos vazios ou duplicados.",
+            "sem_codigo": sem_codigo,
+            "codigos_duplicados": duplicados,
+        }), 400
+
+    origem = Path(pendente["caminho"])
+    destino = DIRS["PLANILHAS"] / f"planilha_{upload_id}{origem.suffix.lower()}"
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    origem.replace(destino)
+    reader = PlanilhaReader(destino)
+    alunos = reader.ler()
+    turmas = _ativar_planilha(destino, alunos=alunos, reader=reader)
+    return jsonify({
+        "sucesso": True,
+        "total": len(alunos),
+        "total_turmas": len(turmas),
+        "alunos": [_serializar_aluno(aluno) for aluno in alunos],
+        "turmas": {nome: len(turma.alunos) for nome, turma in turmas.items()},
+        "arquivo": str(destino),
+    })
+
+
+@app.route("/api/planilha/cancelar", methods=["POST"])
+def cancelar_planilha():
+    """Descarta uma importação pendente sem alterar a base ativa."""
+    upload_id = str((request.get_json() or {}).get("upload_id", "")).strip()
+    pendente = app_state["importacoes_pendentes"].pop(upload_id, None)
+    if pendente:
+        Path(pendente["caminho"]).unlink(missing_ok=True)
+    return jsonify({"sucesso": True, "cancelada": bool(pendente)})
 
 
 @app.route("/api/alunos")
@@ -233,16 +471,9 @@ def listar_alunos():
 
     return jsonify({
         "total": len(alunos),
-        "alunos": [
-            {
-                "nome": a.nome,
-                "turma": a.turma,
-                "curso": a.curso,
-                "matricula": a.matricula,
-                "observacao": a.observacao,
-            }
-            for a in alunos
-        ],
+        "alunos": [_serializar_aluno(aluno) for aluno in alunos],
+        "planilha_carregada": app_state["planilha_carregada"],
+        "confirmada_em": app_state["planilha_confirmada_em"],
     })
 
 
@@ -256,11 +487,14 @@ def gerar_crachas():
         return jsonify({"erro": "Nenhum dado carregado. Importe uma planilha primeiro."}), 400
 
     formato = data.get("formato", "png")
-    cor_destaque = data.get("cor_destaque", "#1a5276")
     mostrar_foto = data.get("mostrar_foto", True)
     mostrar_qr = data.get("mostrar_qr", True)
     turma = str(data.get("turma", "")).strip()
-    selecionados = data.get("alunos", [])  # Lista de nomes, vazio = todos
+    codigos_selecionados = {
+        QRCodeGenerator.normalizar_codigo(codigo)
+        for codigo in data.get("codigos", []) if codigo is not None
+    }
+    nomes_legados = set(data.get("alunos", []))
 
     if formato not in FORMATOS_SAIDA:
         return jsonify({"erro": f"Formato inválido: {formato}"}), 400
@@ -269,35 +503,38 @@ def gerar_crachas():
     alunos_gerar = alunos
     if turma:
         alunos_gerar = [a for a in alunos_gerar if a.turma == turma]
-    if selecionados:
-        alunos_gerar = [a for a in alunos_gerar if a.nome in selecionados]
+    if codigos_selecionados:
+        alunos_gerar = [
+            aluno for aluno in alunos_gerar
+            if QRCodeGenerator.normalizar_codigo(aluno.matricula) in codigos_selecionados
+        ]
+    elif nomes_legados:
+        alunos_gerar = [aluno for aluno in alunos_gerar if aluno.nome in nomes_legados]
 
     if not alunos_gerar:
         return jsonify({"erro": "Nenhum aluno corresponde aos filtros selecionados."}), 400
 
-    if mostrar_qr:
-        sem_codigo, duplicados = _validar_codigos_qr(alunos_gerar)
-        if sem_codigo or duplicados:
-            detalhes = []
-            if sem_codigo:
-                detalhes.append(
-                    f"{len(sem_codigo)} aluno(s) sem codigo: {', '.join(sem_codigo[:5])}"
-                )
-            if duplicados:
-                exemplos = ", ".join(
-                    f"{codigo} ({'/'.join(nomes[:3])})"
-                    for codigo, nomes in list(duplicados.items())[:5]
-                )
-                detalhes.append(f"codigo(s) duplicado(s): {exemplos}")
-            return jsonify({
-                "erro": "Nao foi possivel gerar os QR Codes. " + "; ".join(detalhes),
-                "sem_codigo": sem_codigo,
-                "codigos_duplicados": duplicados,
-            }), 400
+    sem_codigo, duplicados = _validar_codigos_qr(alunos_gerar)
+    if sem_codigo or duplicados:
+        detalhes = []
+        if sem_codigo:
+            detalhes.append(
+                f"{len(sem_codigo)} aluno(s) sem codigo: {', '.join(sem_codigo[:5])}"
+            )
+        if duplicados:
+            exemplos = ", ".join(
+                f"{codigo} ({'/'.join(nomes[:3])})"
+                for codigo, nomes in list(duplicados.items())[:5]
+            )
+            detalhes.append(f"codigo(s) duplicado(s): {exemplos}")
+        return jsonify({
+            "erro": "Não foi possível identificar unicamente os alunos. " + "; ".join(detalhes),
+            "sem_codigo": sem_codigo,
+            "codigos_duplicados": duplicados,
+        }), 400
 
     config = ConfiguracaoCracha(
         turma_nome="",
-        cor_destaque=cor_destaque,
         mostrar_foto=mostrar_foto,
         mostrar_qr_code=mostrar_qr,
     )
@@ -308,30 +545,52 @@ def gerar_crachas():
 
     resultados = []
     erros = []
+    manifestos_por_pasta = {}
 
     for i, aluno in enumerate(alunos_gerar):
         try:
-            nome_base = exportador._sanitizar_nome(aluno.nome)
+            codigo = QRCodeGenerator.normalizar_codigo(aluno.matricula)
+            nome_base = exportador._sanitizar_nome(codigo)
             pasta_aluno = pasta_saida / (aluno.turma or "SEM_TURMA")
             pasta_aluno.mkdir(parents=True, exist_ok=True)
-
+            caminho_final = pasta_aluno / f"{nome_base}.{formato}"
+            caminho_temp = pasta_aluno / f".{nome_base}.{uuid.uuid4().hex}.tmp.{formato}"
             if formato == "png":
-                caminho = exportador.exportar_png(aluno, pasta_aluno / f"{nome_base}.png")
+                exportador.exportar_png(aluno, caminho_temp)
             elif formato == "jpg":
-                caminho = exportador.exportar_jpg(aluno, pasta_aluno / f"{nome_base}.jpg")
+                exportador.exportar_jpg(aluno, caminho_temp)
             elif formato == "pdf":
-                caminho = exportador.exportar_pdf(aluno, pasta_aluno / f"{nome_base}.pdf")
+                exportador.exportar_pdf(aluno, caminho_temp)
             elif formato == "html":
-                caminho = exportador.exportar_html(aluno, pasta_aluno / f"{nome_base}.html")
+                exportador.exportar_html(aluno, caminho_temp)
+            caminho_temp.replace(caminho_final)
+            caminho = caminho_final
+
+            qr_identificador = (
+                QRCodeGenerator().gerar_para_aluno(
+                    aluno.nome, aluno.turma, aluno.qr_code_dados, aluno.matricula
+                ) if mostrar_qr else None
+            )
+            foto_usada = getattr(montador.foto_handler, "ultima_foto_caminho", None)
+            entrada_manifesto = {
+                "codigo": codigo,
+                "nome": aluno.nome,
+                "turma": aluno.turma,
+                "arquivo": caminho.name,
+                "formato": formato,
+                "sha256": _hash_opcional(caminho),
+                "foto": str(foto_usada) if foto_usada else None,
+                "foto_sha256": _hash_opcional(foto_usada),
+                "qr": qr_identificador,
+                "gerado_em": datetime.now().isoformat(timespec="seconds"),
+            }
+            manifestos_por_pasta.setdefault(pasta_aluno, []).append(entrada_manifesto)
 
             resultados.append({
                 "nome": aluno.nome,
                 "turma": aluno.turma,
                 "codigo": aluno.matricula,
-                "qr_identificador": (
-                    f"IEMA|V1|COD={QRCodeGenerator.normalizar_codigo(aluno.matricula)}"
-                    if mostrar_qr else None
-                ),
+                "qr_identificador": qr_identificador,
                 "arquivo": str(caminho),
                 "formato": formato,
                 "tamanho_kb": round(caminho.stat().st_size / 1024, 1),
@@ -340,12 +599,18 @@ def gerar_crachas():
             erros.append({"nome": aluno.nome, "erro": str(e)})
             logger.error(f"Erro ao gerar crachá de {aluno.nome}: {e}")
 
+    for pasta, entradas in manifestos_por_pasta.items():
+        _salvar_manifesto(pasta, entradas)
+
     return jsonify({
         "total_gerados": len(resultados),
         "total_erros": len(erros),
         "resultados": resultados,
         "erros": erros,
         "pasta_saida": str(pasta_saida),
+        "reconciliacao": (
+            _reconciliar_turma(turma) if turma else None
+        ),
     })
 
 
@@ -373,7 +638,6 @@ def exportar_pdf_turma():
 
     config = ConfiguracaoCracha(
         turma_nome=turma,
-        cor_destaque=data.get("cor_destaque", "#1a5276"),
         mostrar_foto=data.get("mostrar_foto", True),
         mostrar_qr_code=mostrar_qr,
     )
@@ -406,9 +670,14 @@ def exportar_pdf_turma():
 def gerar_preview():
     """Gera preview de um crachá específico e retorna como base64."""
     data = request.get_json() or {}
+    codigo = QRCodeGenerator.normalizar_codigo(data.get("codigo"))
     nome = data.get("nome", "")
-
-    aluno = next((a for a in app_state["alunos"] if a.nome == nome), None)
+    aluno = next((
+        a for a in app_state["alunos"]
+        if codigo and QRCodeGenerator.normalizar_codigo(a.matricula) == codigo
+    ), None)
+    if aluno is None and nome:
+        aluno = next((a for a in app_state["alunos"] if a.nome == nome), None)
     if not aluno:
         return jsonify({"erro": "Aluno não encontrado"}), 404
 
@@ -417,7 +686,6 @@ def gerar_preview():
 
     config = ConfiguracaoCracha(
         turma_nome=aluno.turma,
-        cor_destaque=data.get("cor_destaque", "#1a5276"),
         mostrar_foto=data.get("mostrar_foto", True),
         mostrar_qr_code=data.get("mostrar_qr", True),
     )
@@ -433,6 +701,7 @@ def gerar_preview():
 
     return jsonify({
         "nome": aluno.nome,
+        "codigo": aluno.matricula,
         "imagem": f"data:image/png;base64,{img_base64}",
     })
 
@@ -441,8 +710,15 @@ def gerar_preview():
 def criar_backup_api():
     """Cria backup do sistema."""
     try:
-        caminho = criar_backup()
-        return jsonify({"sucesso": True, "caminho": str(caminho)})
+        incluir_gerados = bool((request.get_json(silent=True) or {}).get("incluir_gerados", False))
+        caminho = criar_backup(incluir_gerados=incluir_gerados)
+        validacao = validar_backup(caminho)
+        return jsonify({
+            "sucesso": True,
+            "caminho": str(caminho),
+            "arquivo": caminho.name,
+            "validacao": validacao,
+        })
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
@@ -469,10 +745,120 @@ def baixar_exemplo():
 
 @app.route("/api/crachas")
 def listar_crachas_gerados():
-    """Lista os crachás já gerados."""
+    """Lista os crachás já gerados, opcionalmente filtrados por turma."""
+    turma = str(request.args.get("turma", "")).strip()
     diag = Diagnosticador()
     crachas = diag.listar_crachas_montados()
-    return jsonify({"crachas": crachas})
+    if turma:
+        crachas = [cracha for cracha in crachas if cracha["turma"] == turma]
+
+    for cracha in crachas:
+        caminho_relativo = Path(cracha["caminho"]).relative_to(DIRS["MONTADOS"])
+        cracha["url"] = f"/crachas/{quote(caminho_relativo.as_posix(), safe='/')}"
+
+    return jsonify({
+        "crachas": crachas,
+        "turma": turma,
+        "total": len(crachas),
+    })
+
+
+@app.route("/api/reconciliacao")
+def reconciliacao():
+    turma = str(request.args.get("turma", "")).strip()
+    if turma:
+        return jsonify(_reconciliar_turma(turma))
+    return jsonify({
+        "turmas": [_reconciliar_turma(nome) for nome in sorted(app_state["turmas"])]
+    })
+
+
+@app.route("/api/integridade/fotos")
+def integridade_fotos():
+    """Audita a foto efetivamente escolhida para cada aluno ativo."""
+    resultado = auditar_fotos(app_state["alunos"])
+    resultado["total_arquivos_foto"] = contar_arquivos_foto()
+    turma = str(request.args.get("turma", "")).strip()
+    if turma:
+        itens = [item for item in resultado["itens"] if item["turma"] == turma]
+        resultado["itens"] = itens
+        resultado["total_alunos"] = len(itens)
+        resultado["por_codigo"] = sum(item["metodo"] == "codigo" for item in itens)
+        resultado["por_nome_legado"] = sum(
+            item["metodo"] == "nome_legado" for item in itens
+        )
+        resultado["sem_foto"] = sum(item["metodo"] == "ausente" for item in itens)
+    return jsonify(resultado)
+
+
+@app.route("/api/arquivar-obsoletos", methods=["POST"])
+def arquivar_obsoletos():
+    turma = str((request.get_json() or {}).get("turma", "")).strip()
+    if not turma:
+        return jsonify({"erro": "Selecione uma turma."}), 400
+    resultado = _reconciliar_turma(turma)
+    if not resultado["obsoletos"]:
+        return jsonify({"turma": turma, "total": 0, "arquivados": []})
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    destino = DIRS["MONTADOS"] / "_obsoletos" / timestamp / ExportadorCracha._sanitizar_nome(turma)
+    destino.mkdir(parents=True, exist_ok=True)
+    arquivados = []
+    raiz = DIRS["MONTADOS"].resolve()
+    for item in resultado["obsoletos"]:
+        origem = Path(item["caminho"]).resolve()
+        if raiz not in origem.parents or origem.parent.name != ExportadorCracha._sanitizar_nome(turma):
+            return jsonify({"erro": "Caminho de arquivo obsoleto inválido."}), 400
+        alvo = destino / origem.name
+        shutil.move(str(origem), str(alvo))
+        arquivados.append(str(alvo))
+    return jsonify({"turma": turma, "total": len(arquivados), "arquivados": arquivados})
+
+
+@app.route("/api/backups")
+def listar_backups():
+    backups = sorted(DIRS["BACKUPS"].glob("backup_cracha_*.zip"), reverse=True)
+    return jsonify({"backups": [
+        {"arquivo": item.name, "tamanho_mb": round(item.stat().st_size / 1024 / 1024, 2)}
+        for item in backups
+    ]})
+
+
+@app.route("/api/backup/validar", methods=["POST"])
+def validar_backup_api():
+    nome = secure_filename(str((request.get_json() or {}).get("arquivo", "")))
+    caminho = DIRS["BACKUPS"] / nome
+    try:
+        return jsonify(validar_backup(caminho))
+    except (OSError, ValueError, zipfile.BadZipFile) as erro:
+        return jsonify({"erro": str(erro)}), 400
+
+
+@app.route("/api/backup/extrair", methods=["POST"])
+def extrair_backup_isolado():
+    """Valida e extrai um backup em área isolada, sem alterar o sistema ativo."""
+    nome = secure_filename(str((request.get_json() or {}).get("arquivo", "")))
+    caminho = DIRS["BACKUPS"] / nome
+    try:
+        validacao = validar_backup(caminho)
+        if not validacao.get("valido"):
+            return jsonify({"erro": "O backup não passou na validação."}), 400
+        destino = DIRS["DIAG_SAIDA"] / "restauracoes" / uuid.uuid4().hex
+        destino.mkdir(parents=True, exist_ok=False)
+        raiz = destino.resolve()
+        with zipfile.ZipFile(caminho, "r") as arquivo_zip:
+            for membro in arquivo_zip.infolist():
+                alvo = (destino / membro.filename).resolve()
+                if alvo != raiz and raiz not in alvo.parents:
+                    raise ValueError("O backup contém um caminho inseguro.")
+            arquivo_zip.extractall(destino)
+        return jsonify({
+            "sucesso": True,
+            "pasta": str(destino),
+            "validacao": validacao,
+            "mensagem": "Backup extraído em área isolada; o sistema ativo não foi alterado.",
+        })
+    except (OSError, ValueError, zipfile.BadZipFile) as erro:
+        return jsonify({"erro": str(erro)}), 400
 
 
 # ========== ROTAS DO FRONTEND ==========
@@ -497,18 +883,9 @@ def crachas_arquivos(filename):
 
 # ========== UTILITÁRIOS ==========
 
-def _salvar_temporario(arquivo) -> Path:
-    """Salva arquivo enviado em diretório temporário."""
-    pasta_temp = DIRS["DIAG_SAIDA"] / "uploads"
-    pasta_temp.mkdir(parents=True, exist_ok=True)
-    caminho = pasta_temp / arquivo.filename
-    arquivo.save(caminho)
-    return caminho
-
-
-def _salvar_temporario(arquivo) -> Path:
+def _salvar_temporario(arquivo, upload_id: str | None = None) -> Path:
     """Salva arquivo enviado em diretorio temporario com nome seguro."""
-    pasta_temp = DIRS["DIAG_SAIDA"] / "uploads"
+    pasta_temp = DIRS["IMPORTACOES_PENDENTES"]
     pasta_temp.mkdir(parents=True, exist_ok=True)
     nome_seguro = secure_filename(arquivo.filename or "")
     extensao = Path(nome_seguro).suffix.lower()
@@ -518,7 +895,8 @@ def _salvar_temporario(arquivo) -> Path:
             f"Use: {', '.join(EXTENSOES_PLANILHA)}"
         )
 
-    caminho = pasta_temp / f"{Path(nome_seguro).stem}_{uuid.uuid4().hex[:8]}{extensao}"
+    identificador = upload_id or uuid.uuid4().hex
+    caminho = pasta_temp / f"{Path(nome_seguro).stem}_{identificador}{extensao}"
     arquivo.save(caminho)
     return caminho
 
@@ -530,5 +908,9 @@ def criar_app():
 
 def iniciar_servidor(host="127.0.0.1", port=5000, debug=False):
     """Inicia o servidor web."""
+    if host not in {"127.0.0.1", "localhost", "::1"} and os.environ.get("CRACHA_ALLOW_NETWORK") != "1":
+        raise RuntimeError(
+            "A exposição em rede exige CRACHA_ALLOW_NETWORK=1 e proteção de acesso explícita."
+        )
     logger.info(f"Iniciando servidor em http://{host}:{port}")
     app.run(host=host, port=port, debug=debug)

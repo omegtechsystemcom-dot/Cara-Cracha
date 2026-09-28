@@ -93,7 +93,7 @@ if ($Foreground) {
 }
 
 $serverScript = Join-Path $Root "server_console.ps1"
-Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-NoExit", "-File", "`"$serverScript`"" -WorkingDirectory $Root
+Start-Process -FilePath "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$serverScript`"" -WorkingDirectory $Root -WindowStyle Hidden
 
 $ready = $false
 for ($i = 0; $i -lt 20; $i++) {

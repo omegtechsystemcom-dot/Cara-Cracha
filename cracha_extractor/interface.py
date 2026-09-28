@@ -44,7 +44,6 @@ class AppCracha:
         self.status_texto = tk.StringVar(value="Pronto para começar")
 
         # Configurações
-        self.cor_destaque = tk.StringVar(value="#1a5276")
         self.mostrar_foto = tk.BooleanVar(value=True)
         self.mostrar_qr = tk.BooleanVar(value=True)
 
@@ -183,15 +182,11 @@ class AppCracha:
         frame_visual.pack(fill=tk.X, padx=20, pady=10)
 
         # Cor de destaque
-        ttk.Label(frame_visual, text="Cor de Destaque:").grid(row=0, column=0, sticky=tk.W, pady=5)
-        ttk.Entry(frame_visual, textvariable=self.cor_destaque, width=15).grid(row=0, column=1, sticky=tk.W, padx=5)
-        ttk.Button(frame_visual, text="🎨", command=self.escolher_cor, width=3).grid(row=0, column=2)
-
         # Opções
         ttk.Checkbutton(frame_visual, text="Mostrar foto do aluno",
-                        variable=self.mostrar_foto).grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=5)
+                        variable=self.mostrar_foto).grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=5)
         ttk.Checkbutton(frame_visual, text="Mostrar QR Code",
-                        variable=self.mostrar_qr).grid(row=2, column=0, columnspan=3, sticky=tk.W, pady=5)
+                        variable=self.mostrar_qr).grid(row=1, column=0, columnspan=3, sticky=tk.W, pady=5)
 
         # Formato de saída
         frame_formato = ttk.LabelFrame(frame, text="Formato de Saída", padding=10)
@@ -316,16 +311,6 @@ class AppCracha:
         if caminho:
             self.pasta_saida.set(caminho)
 
-    def escolher_cor(self):
-        """Abre seletor de cores."""
-        from tkinter import colorchooser
-        cor = colorchooser.askcolor(
-            title="Escolher Cor de Destaque",
-            initialcolor=self.cor_destaque.get(),
-        )
-        if cor and cor[1]:
-            self.cor_destaque.set(cor[1])
-
     def carregar_dados(self):
         """Carrega os dados da planilha selecionada."""
         caminho = self.planilha_path.get()
@@ -380,32 +365,35 @@ class AppCracha:
             return
 
         # Iniciar em thread separada para não travar a interface
-        thread = Thread(target=self._gerar_crachas_thread, daemon=True)
+        sem_codigo = [aluno.nome for aluno in self.alunos if not aluno.matricula]
+        if sem_codigo:
+            messagebox.showerror("Erro", "Existem alunos sem código oficial.")
+            return
+        self.btn_gerar.config(state=tk.DISABLED)
+        self.progresso["value"] = 0
+        self.progresso["maximum"] = len(self.alunos)
+        argumentos = (
+            list(self.alunos), Path(self.pasta_saida.get()), self.formato_saida.get(),
+            self.mostrar_foto.get(), self.mostrar_qr.get(),
+        )
+        thread = Thread(target=self._gerar_crachas_thread, args=argumentos, daemon=True)
         thread.start()
 
-    def _gerar_crachas_thread(self):
+    def _gerar_crachas_thread(self, alunos, pasta_saida, formato, mostrar_foto, mostrar_qr):
         """Executa a geração dos crachás (executado em thread separada)."""
         try:
-            self.btn_gerar.config(state=tk.DISABLED)
-            self.progresso["value"] = 0
-            self.progresso["maximum"] = len(self.alunos)
-
             # Configurar
             config = ConfiguracaoCracha(
                 turma_nome="",
-                cor_destaque=self.cor_destaque.get(),
-                mostrar_foto=self.mostrar_foto.get(),
-                mostrar_qr_code=self.mostrar_qr.get(),
+                mostrar_foto=mostrar_foto,
+                mostrar_qr_code=mostrar_qr,
             )
 
             montador = MontadorCracha(config)
             exportador = ExportadorCracha(montador)
-            pasta_saida = Path(self.pasta_saida.get())
-            formato = self.formato_saida.get()
-
             # Gerar um a um
-            for i, aluno in enumerate(self.alunos):
-                nome_base = exportador._sanitizar_nome(aluno.nome)
+            for i, aluno in enumerate(alunos):
+                nome_base = exportador._sanitizar_nome(aluno.matricula)
 
                 if aluno.turma:
                     pasta_aluno = pasta_saida / aluno.turma
@@ -424,25 +412,27 @@ class AppCracha:
                     exportador.exportar_html(aluno, pasta_aluno / f"{nome_base}.html")
 
                 # Atualizar progresso
-                self.progresso["value"] = i + 1
-                self.label_progresso.config(
-                    text=f"Gerando: {aluno.nome} ({i + 1}/{len(self.alunos)})"
-                )
+                self.root.after(0, self._atualizar_progresso, i + 1, len(alunos), aluno.nome)
 
-            self.status_texto.set(f"✅ {len(self.alunos)} crachás gerados em {pasta_saida}")
-            self.label_progresso.config(text="✅ Geração concluída!")
-
-            messagebox.showinfo(
-                "Concluído",
-                f"{len(self.alunos)} crachás gerados com sucesso!\n"
-                f"Pasta: {pasta_saida}",
-            )
+            self.root.after(0, self._finalizar_geracao, len(alunos), pasta_saida)
 
         except Exception as e:
-            messagebox.showerror("Erro", f"Erro ao gerar crachás:\n{str(e)}")
             logger.error(f"Erro ao gerar crachás: {e}")
-        finally:
-            self.btn_gerar.config(state=tk.NORMAL)
+            self.root.after(0, self._falha_geracao, str(e))
+
+    def _atualizar_progresso(self, atual, total, nome):
+        self.progresso["value"] = atual
+        self.label_progresso.config(text=f"Gerando: {nome} ({atual}/{total})")
+
+    def _finalizar_geracao(self, total, pasta_saida):
+        self.status_texto.set(f"✅ {total} crachás gerados em {pasta_saida}")
+        self.label_progresso.config(text="✅ Geração concluída!")
+        self.btn_gerar.config(state=tk.NORMAL)
+        messagebox.showinfo("Concluído", f"{total} crachás gerados com sucesso!\nPasta: {pasta_saida}")
+
+    def _falha_geracao(self, mensagem):
+        self.btn_gerar.config(state=tk.NORMAL)
+        messagebox.showerror("Erro", f"Erro ao gerar crachás:\n{mensagem}")
 
     def executar_backup(self):
         """Executa backup do sistema."""
@@ -501,7 +491,7 @@ class AppCracha:
         messagebox.showinfo(
             "Sobre",
             "Sistema de Montagem de Crachás\n"
-            "Versão: 1.0.0\n\n"
+            "Versão: 2.1.0\n\n"
             "Funcionalidades:\n"
             "• Importar dados de planilhas Excel/CSV\n"
             "• Gerar QR Codes automaticamente\n"

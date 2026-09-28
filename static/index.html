@@ -18,42 +18,42 @@
             </div>
         </div>
         <nav class="sidebar-nav">
-            <button class="nav-item active" data-tab="dashboard" onclick="mudarAba('dashboard')">
+            <button class="nav-item active" data-tab="dashboard">
                 <span class="nav-icon">📊</span>
                 <span class="nav-label">Dashboard</span>
             </button>
-            <button class="nav-item" data-tab="importar" onclick="mudarAba('importar')">
+            <button class="nav-item" data-tab="importar">
                 <span class="nav-icon">📂</span>
                 <span class="nav-label">Importar Dados</span>
             </button>
-            <button class="nav-item" onclick="carregarDadosIEMA()" style="color: var(--success);">
+            <button class="nav-item" id="navCarregarIema" style="color: var(--success);">
                 <span class="nav-icon">🏫</span>
                 <span class="nav-label">Carregar IEMA</span>
             </button>
-            <button class="nav-item" data-tab="alunos" onclick="mudarAba('alunos')">
+            <button class="nav-item" data-tab="alunos">
                 <span class="nav-icon">👥</span>
                 <span class="nav-label">Alunos</span>
                 <span class="nav-badge" id="badge-alunos">0</span>
             </button>
-            <button class="nav-item" data-tab="configurar" onclick="mudarAba('configurar')">
+            <button class="nav-item" data-tab="configurar">
                 <span class="nav-icon">⚙️</span>
                 <span class="nav-label">Configurar</span>
             </button>
-            <button class="nav-item" data-tab="gerar" onclick="mudarAba('gerar')">
+            <button class="nav-item" data-tab="gerar">
                 <span class="nav-icon">🚀</span>
                 <span class="nav-label">Gerar Crachás</span>
             </button>
-            <button class="nav-item" data-tab="visualizar" onclick="mudarAba('visualizar')">
+            <button class="nav-item" data-tab="visualizar">
                 <span class="nav-icon">👁️</span>
                 <span class="nav-label">Visualizar</span>
             </button>
         </nav>
         <div class="sidebar-footer">
-            <button class="nav-item" onclick="abrirDiagnostico()">
+            <button class="nav-item" id="btnDiagnosticoNav">
                 <span class="nav-icon">🔍</span>
                 <span class="nav-label">Diagnóstico</span>
             </button>
-            <button class="nav-item" onclick="fazerBackup()">
+            <button class="nav-item" id="btnBackupNav">
                 <span class="nav-icon">💾</span>
                 <span class="nav-label">Backup</span>
             </button>
@@ -64,7 +64,7 @@
     <main class="main-content" id="mainContent">
         <!-- TOPO -->
         <header class="topbar">
-            <button class="menu-toggle" onclick="toggleSidebar()">☰</button>
+            <button class="menu-toggle" id="menuToggle" aria-label="Abrir menu" aria-expanded="false">☰</button>
             <h1 class="page-title" id="pageTitle">Dashboard</h1>
             <div class="topbar-right">
                 <span class="status-indicator" id="statusIndicator"></span>
@@ -112,19 +112,19 @@
                         <h3>Ações Rápidas</h3>
                     </div>
                     <div class="card-body acoes-rapidas">
-                        <button class="btn btn-primary" onclick="mudarAba('importar')">
+                        <button class="btn btn-primary" data-go-tab="importar">
                             📂 Importar Planilha
                         </button>
-                        <button class="btn btn-success" onclick="carregarDadosIEMA()">
+                        <button class="btn btn-success" id="btnCarregarIemaDashboard">
                             🏫 Carregar Dados IEMA
                         </button>
-                        <button class="btn btn-secondary" onclick="baixarExemplo()">
+                        <button class="btn btn-secondary" id="btnBaixarExemplo">
                             📝 Baixar Modelo Excel
                         </button>
-                        <button class="btn btn-secondary" onclick="mudarAba('gerar')">
+                        <button class="btn btn-secondary" data-go-tab="gerar">
                             🚀 Gerar Todos os Crachás
                         </button>
-                        <button class="btn btn-outline" onclick="abrirDiagnostico()">
+                        <button class="btn btn-outline" id="btnDiagnosticoDashboard">
                             🔍 Diagnóstico
                         </button>
                     </div>
@@ -148,15 +148,14 @@
                         <p class="text-muted">Formatos aceitos: .xlsx, .xls, .csv</p>
                     </div>
                     <div class="card-body">
-                        <div class="upload-zone" id="uploadZone"
-                             ondragover="event.preventDefault()"
-                             ondrop="handleDrop(event)">
+                        <div class="upload-zone" id="uploadZone" role="button" tabindex="0"
+                             aria-label="Selecionar ou soltar uma planilha">
                             <div class="upload-icon">📤</div>
                             <p class="upload-text">Arraste a planilha aqui ou clique para selecionar</p>
                             <p class="upload-hint">Excel (.xlsx, .xls) ou CSV (.csv)</p>
                             <input type="file" id="fileInput" accept=".xlsx,.xls,.csv"
-                                   style="display:none" onchange="handleFileSelect(event)">
-                            <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">
+                                   class="visually-hidden">
+                            <button class="btn btn-primary" id="btnSelecionarPlanilha">
                                 Selecionar Arquivo
                             </button>
                         </div>
@@ -173,10 +172,10 @@
                                 </table>
                             </div>
                             <div class="preview-actions" style="margin-top: 1rem;">
-                                <button class="btn btn-success" onclick="confirmarImportacao()">
+                                <button class="btn btn-success" id="btnConfirmarImportacao">
                                     ✅ Confirmar Importação
                                 </button>
-                                <button class="btn btn-outline" onclick="cancelarImportacao()">
+                                <button class="btn btn-outline" id="btnCancelarImportacao">
                                     Cancelar
                                 </button>
                             </div>
@@ -195,9 +194,9 @@
                             <p class="upload-text">Selecione todas as fotos de uma vez</p>
                             <p class="upload-hint">Exemplos: 2024001.jpg ou maria_da_silva.jpg — JPG, PNG, GIF ou BMP</p>
                             <input type="file" id="fotosInput" accept=".jpg,.jpeg,.png,.gif,.bmp,image/*"
-                                   multiple style="display:none" onchange="handleFotosSelect(event)">
+                                   multiple class="visually-hidden">
                             <button class="btn btn-primary" id="btnSelecionarFotos"
-                                    onclick="document.getElementById('fotosInput').click()">
+                                    type="button">
                                 Selecionar Fotos
                             </button>
                             <p class="upload-status" id="fotosUploadStatus"></p>
@@ -214,8 +213,8 @@
                         <div class="header-actions">
                             <input type="text" class="search-input" id="searchAluno"
                                    placeholder="Buscar por nome ou matrícula..."
-                                   oninput="filtrarAlunos()">
-                            <select class="select-filter" id="filterTurma" onchange="filtrarAlunos()">
+                                   aria-label="Buscar aluno">
+                            <select class="select-filter" id="filterTurma" aria-label="Filtrar alunos por turma">
                                 <option value="">Todas as turmas</option>
                             </select>
                         </div>
@@ -225,7 +224,7 @@
                             <table class="data-table" id="alunosTable">
                                 <thead>
                                     <tr>
-                                        <th><input type="checkbox" id="selectAll" onchange="selecionarTodos()"></th>
+                                        <th><input type="checkbox" id="selectAll" aria-label="Selecionar todos os alunos visíveis"></th>
                                         <th>Nome</th>
                                         <th>Turma</th>
                                         <th>Curso</th>
@@ -251,34 +250,25 @@
                     </div>
                     <div class="card-body config-grid">
                         <div class="config-group">
-                            <label class="config-label">Cor de Destaque</label>
-                            <div class="color-picker-row">
-                                <input type="color" id="corDestaque" value="#1a5276"
-                                       onchange="atualizarPreview()">
-                                <input type="text" id="corDestaqueHex" value="#1a5276"
-                                       oninput="atualizarCor(this.value)" class="input-sm">
-                            </div>
-                        </div>
-                        <div class="config-group">
                             <label class="config-label">Formato de Saída</label>
                             <div class="formato-options">
                                 <label class="radio-card selected" data-value="png">
-                                    <input type="radio" name="formato" value="png" checked onchange="mudarFormato(this)">
+                                    <input type="radio" name="formato" value="png" checked>
                                     <span class="radio-icon">🖼️</span>
                                     <span class="radio-label">PNG</span>
                                 </label>
                                 <label class="radio-card" data-value="jpg">
-                                    <input type="radio" name="formato" value="jpg" onchange="mudarFormato(this)">
+                                    <input type="radio" name="formato" value="jpg">
                                     <span class="radio-icon">📷</span>
                                     <span class="radio-label">JPG</span>
                                 </label>
                                 <label class="radio-card" data-value="pdf">
-                                    <input type="radio" name="formato" value="pdf" onchange="mudarFormato(this)">
+                                    <input type="radio" name="formato" value="pdf">
                                     <span class="radio-icon">📄</span>
                                     <span class="radio-label">PDF individual</span>
                                 </label>
                                 <label class="radio-card" data-value="html">
-                                    <input type="radio" name="formato" value="html" onchange="mudarFormato(this)">
+                                    <input type="radio" name="formato" value="html">
                                     <span class="radio-icon">🌐</span>
                                     <span class="radio-label">HTML</span>
                                 </label>
@@ -288,12 +278,12 @@
                             <label class="config-label">Elementos do Crachá</label>
                             <div class="checkbox-group">
                                 <label class="toggle-switch">
-                                    <input type="checkbox" id="mostrarFoto" checked onchange="atualizarPreview()">
+                                    <input type="checkbox" id="mostrarFoto" checked>
                                     <span class="toggle-slider"></span>
                                     <span class="toggle-label">Mostrar foto do aluno</span>
                                 </label>
                                 <label class="toggle-switch">
-                                    <input type="checkbox" id="mostrarQR" checked onchange="atualizarPreview()">
+                                    <input type="checkbox" id="mostrarQR" checked>
                                     <span class="toggle-slider"></span>
                                     <span class="toggle-label">Mostrar QR Code</span>
                                 </label>
@@ -310,8 +300,12 @@
                         <h3>Gerar Crachás</h3>
                         <div class="header-actions">
                             <label for="gerarTurma" class="filter-label">Filtrar por turma</label>
-                            <select class="select-filter" id="gerarTurma" onchange="filtrarGeracaoPorTurma()">
+                            <select class="select-filter" id="gerarTurma">
                                 <option value="">Todas as turmas</option>
+                            </select>
+                            <label for="gerarAluno" class="filter-label">Aluno</label>
+                            <select class="select-filter select-filter-wide" id="gerarAluno">
+                                <option value="">Todos os alunos</option>
                             </select>
                         </div>
                     </div>
@@ -333,20 +327,34 @@
                         </div>
 
                         <div class="gerar-actions">
-                            <button class="btn btn-primary btn-lg" onclick="gerarCrachas()" id="btnGerar">
+                            <button class="btn btn-primary btn-lg" id="btnGerar">
                                 🚀 GERAR CRACHÁS
                             </button>
-                            <button class="btn btn-outline" onclick="gerarPreview()" id="btnPreview">
+                            <button class="btn btn-outline" id="btnPreview">
                                 👁️ Preview
                             </button>
-                            <button class="btn btn-outline" onclick="exportarPdfTurma()"
+                            <button class="btn btn-outline"
                                     id="btnPdfTurma" disabled
                                     title="Selecione uma turma para exportar">
                                 📄 EXPORTAR PDF DA TURMA
                             </button>
+                            <button class="btn btn-outline" id="btnArquivarObsoletos" disabled
+                                    title="Selecione uma turma com arquivos obsoletos">
+                                Arquivar obsoletos
+                            </button>
                         </div>
 
                         <div id="resultadoGeracao" style="display:none; margin-top: 1.5rem;"></div>
+
+                        <div class="crachas-filtrados" id="crachasFiltrados">
+                            <div class="crachas-filtrados-header">
+                                <h4 id="crachasFiltradosTitulo">Crachás gerados por turma</h4>
+                                <span class="crachas-contador" id="crachasFiltradosTotal"></span>
+                            </div>
+                            <div id="crachasFiltradosConteudo" class="crachas-estado-vazio">
+                                Selecione uma turma para visualizar os crachás já gerados.
+                            </div>
+                        </div>
                     </div>
                 </div>
             </section>
@@ -356,7 +364,7 @@
                 <div class="card">
                     <div class="card-header">
                         <h3>Visualizar Crachá</h3>
-                        <select class="select-filter" id="previewAluno" onchange="gerarPreview()">
+                        <select class="select-filter" id="previewAluno">
                             <option value="">Selecione um aluno</option>
                         </select>
                     </div>
@@ -376,11 +384,12 @@
     </main>
 
     <!-- Modal -->
-    <div class="modal-overlay" id="modalOverlay" onclick="fecharModal()">
-        <div class="modal-content" onclick="event.stopPropagation()">
+    <div class="modal-overlay" id="modalOverlay" role="dialog" aria-modal="true"
+         aria-labelledby="modalTitle" aria-hidden="true" hidden>
+        <div class="modal-content" tabindex="-1">
             <div class="modal-header">
                 <h3 id="modalTitle">Modal</h3>
-                <button class="modal-close" onclick="fecharModal()">&times;</button>
+                <button class="modal-close" id="modalClose" aria-label="Fechar janela">&times;</button>
             </div>
             <div class="modal-body" id="modalBody"></div>
         </div>

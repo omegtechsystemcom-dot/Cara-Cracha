@@ -1,111 +1,98 @@
 /**
- * Sistema de Crachás - Frontend JavaScript
- * Aplicação SPA com comunicação via API REST
+ * CracháWeb — interface web.
+ * Dados vindos da planilha são sempre inseridos com textContent para evitar
+ * que nomes, turmas ou mensagens sejam interpretados como HTML.
  */
+'use strict';
 
-// ===== ESTADO GLOBAL =====
 const STATE = {
     alunos: [],
     turmas: {},
     planilhaCarregada: false,
+    importacaoPendente: null,
     alunosSelecionados: new Set(),
     formato: 'png',
-    corDestaque: '#1a5276',
     mostrarFoto: true,
     mostrarQR: true,
 };
 
-// ===== API HELPER =====
 const API = {
     async request(url, options = {}) {
-        const config = {
-            headers: { 'Accept': 'application/json' },
-            ...options,
-        };
-
+        const config = { headers: { Accept: 'application/json' }, ...options };
         if (config.body && !(config.body instanceof FormData)) {
             config.headers['Content-Type'] = 'application/json';
             config.body = JSON.stringify(config.body);
         }
-
         const response = await fetch(url, config);
+        const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-            const err = await response.json().catch(() => ({ erro: 'Erro desconhecido' }));
-            throw new Error(err.erro || `HTTP ${response.status}`);
+            const erro = new Error(data.erro || `HTTP ${response.status}`);
+            erro.status = response.status;
+            erro.data = data;
+            throw erro;
         }
-        return response.json();
+        return data;
     },
-
     get(url) { return this.request(url); },
-    post(url, data) { return this.request(url, { method: 'POST', body: data }); },
-    upload(url, formData) { return this.request(url, { method: 'POST', body: formData }); },
+    post(url, body = {}) { return this.request(url, { method: 'POST', body }); },
+    upload(url, body) { return this.request(url, { method: 'POST', body }); },
 };
 
-// ===== PLANILHA PADRÃO IEMA =====
-async function carregarDadosIEMA() {
-    try {
-        mostrarToast('📂 Carregando dados do IEMA...', 'info');
-        const data = await API.post('/api/planilha-padrao');
+const porId = id => document.getElementById(id);
+const limpar = elemento => elemento.replaceChildren();
+const criar = (tag, texto = '', classe = '') => {
+    const elemento = document.createElement(tag);
+    if (texto !== '') elemento.textContent = String(texto);
+    if (classe) elemento.className = classe;
+    return elemento;
+};
 
-        // Salvar estado
-        STATE.alunos = data.preview || [];
-        STATE.turmas = data.turmas || {};
-        STATE.planilhaCarregada = true;
-
-        // Atualizar badge
-        document.getElementById('badge-alunos').textContent = data.total_alunos;
-
-        mostrarToast(`✅ ${data.total_alunos} alunos do IEMA carregados!`, 'success');
-
-        // Ir para preview
-        mudarAba('importar');
-
-        // Mostrar preview
-        const previewArea = document.getElementById('previewArea');
-        previewArea.style.display = 'block';
-
-        document.getElementById('previewStats').textContent =
-            `${data.total_alunos} alunos • ${data.total_turmas} turmas • ${data.arquivo}`;
-
-        // Renderizar tabela de preview
-        const table = document.getElementById('previewTable');
-        const thead = table.querySelector('thead tr');
-        const tbody = table.querySelector('tbody');
-
-        const colunas = Object.keys(data.colunas_detectadas);
-        thead.innerHTML = colunas.map(c =>
-            `<th>${c.charAt(0).toUpperCase() + c.slice(1)}</th>`
-        ).join('');
-
-        tbody.innerHTML = data.preview.map(a => `
-            <tr>
-                <td>${a.nome}</td>
-                <td>${a.turma}</td>
-                <td>${a.curso}</td>
-                <td>${a.matricula}</td>
-            </tr>
-        `).join('');
-
-        // Confirmar importação automaticamente
-        await confirmarImportacao();
-
-    } catch (err) {
-        mostrarToast(`❌ ${err.message}`, 'error');
-    }
+function mostrarToast(mensagem, tipo = 'info') {
+    const toast = criar('div', mensagem, `toast toast-${tipo}`);
+    porId('toastContainer').appendChild(toast);
+    setTimeout(() => {
+        toast.style.opacity = '0';
+        toast.style.transform = 'translateX(100%)';
+        setTimeout(() => toast.remove(), 300);
+    }, 4000);
 }
 
-// ===== NAVEGAÇÃO =====
-function mudarAba(aba) {
-    // Atualizar tabs
+let focoAntesDoModal = null;
+function abrirModal(titulo, conteudo) {
+    focoAntesDoModal = document.activeElement;
+    porId('modalTitle').textContent = titulo;
+    const corpo = porId('modalBody');
+    limpar(corpo);
+    corpo.appendChild(conteudo instanceof Node ? conteudo : criar('p', conteudo));
+    const modal = porId('modalOverlay');
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+    modal.classList.add('open');
+    porId('modalClose').focus();
+}
+
+function fecharModal() {
+    const modal = porId('modalOverlay');
+    modal.classList.remove('open');
+    modal.hidden = true;
+    modal.setAttribute('aria-hidden', 'true');
+    if (focoAntesDoModal?.focus) focoAntesDoModal.focus();
+}
+
+function atualizarMenuMobile(aberto) {
+    porId('sidebar').classList.toggle('open', aberto);
+    porId('menuToggle').setAttribute('aria-expanded', String(aberto));
+    porId('menuToggle').setAttribute('aria-label', aberto ? 'Fechar menu' : 'Abrir menu');
+}
+
+function mudarAba(aba, atualizarHash = true) {
+    const secao = porId(`tab-${aba}`);
+    if (!secao) return;
     document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
-    document.getElementById(`tab-${aba}`).classList.add('active');
-
-    // Atualizar nav
-    document.querySelectorAll('.nav-item[data-tab]').forEach(el => el.classList.remove('active'));
-    const navItem = document.querySelector(`.nav-item[data-tab="${aba}"]`);
-    if (navItem) navItem.classList.add('active');
-
-    // Atualizar título
+    secao.classList.add('active');
+    document.querySelectorAll('.nav-item[data-tab]').forEach(el => {
+        el.classList.toggle('active', el.dataset.tab === aba);
+    });
     const labels = {
         dashboard: 'Dashboard',
         importar: 'Importar Dados',
@@ -114,640 +101,729 @@ function mudarAba(aba) {
         gerar: 'Gerar Crachás',
         visualizar: 'Visualizar',
     };
-    document.getElementById('pageTitle').textContent = labels[aba] || aba;
-
-    // Ações específicas
+    porId('pageTitle').textContent = labels[aba] || aba;
+    if (atualizarHash && location.hash !== `#${aba}`) history.pushState(null, '', `#${aba}`);
     if (aba === 'dashboard') carregarDashboard();
     if (aba === 'alunos') renderizarAlunos();
     if (aba === 'gerar') carregarFiltroGeracao();
     if (aba === 'visualizar') carregarPreviewAlunos();
-
-    // Fechar sidebar mobile
-    document.getElementById('sidebar').classList.remove('open');
+    atualizarMenuMobile(false);
 }
 
-function toggleSidebar() {
-    document.getElementById('sidebar').classList.toggle('open');
+function montarPreviewImportacao(data) {
+    porId('previewArea').style.display = 'block';
+    porId('previewStats').textContent =
+        `${data.total_alunos} alunos • ${data.total_turmas} turmas${data.arquivo ? ` • ${data.arquivo}` : ''}`;
+    const linhaCabecalho = porId('previewTable').querySelector('thead tr');
+    const corpo = porId('previewTable').querySelector('tbody');
+    limpar(linhaCabecalho);
+    limpar(corpo);
+    ['Nome', 'Turma', 'Curso', 'Código', 'Situação'].forEach(nome => {
+        linhaCabecalho.appendChild(criar('th', nome));
+    });
+    (data.preview || []).forEach(aluno => {
+        const linha = document.createElement('tr');
+        [aluno.nome, aluno.turma, aluno.curso, aluno.codigo || aluno.matricula || '—'].forEach(valor => {
+            linha.appendChild(criar('td', valor || '—'));
+        });
+        linha.appendChild(criar('td', `${aluno.tem_foto ? '📷' : '👤'} ${aluno.tem_qr ? '▣' : '—'}`));
+        corpo.appendChild(linha);
+    });
 }
 
-// ===== TOAST =====
-function mostrarToast(mensagem, tipo = 'info') {
-    const container = document.getElementById('toastContainer');
-    const toast = document.createElement('div');
-    toast.className = `toast toast-${tipo}`;
-    toast.textContent = mensagem;
-    container.appendChild(toast);
-
-    setTimeout(() => {
-        toast.style.opacity = '0';
-        toast.style.transform = 'translateX(100%)';
-        toast.style.transition = 'all 0.3s ease';
-        setTimeout(() => toast.remove(), 300);
-    }, 4000);
+function aplicarAlunos(data) {
+    STATE.alunos = data.alunos || data.preview || [];
+    STATE.turmas = data.turmas || STATE.alunos.reduce((grupos, aluno) => {
+        grupos[aluno.turma] = (grupos[aluno.turma] || 0) + 1;
+        return grupos;
+    }, {});
+    STATE.planilhaCarregada = STATE.alunos.length > 0;
+    STATE.alunosSelecionados.clear();
+    porId('badge-alunos').textContent = String(STATE.alunos.length);
+    porId('stat-alunos').textContent = String(STATE.alunos.length);
+    porId('stat-turmas').textContent = String(Object.keys(STATE.turmas).length);
+    porId('stat-planilha').textContent = STATE.planilhaCarregada ? '✅' : '—';
+    preencherFiltrosTurma();
+    carregarPreviewAlunos();
 }
 
-// ===== MODAL =====
-function abrirModal(titulo, conteudo) {
-    document.getElementById('modalTitle').textContent = titulo;
-    document.getElementById('modalBody').innerHTML = conteudo;
-    document.getElementById('modalOverlay').classList.add('open');
-}
-
-function fecharModal() {
-    document.getElementById('modalOverlay').classList.remove('open');
-}
-
-// ===== DASHBOARD =====
-async function carregarDashboard() {
+async function carregarEstadoAtivo() {
     try {
-        const diag = await API.get('/api/diagnostico');
-
-        document.getElementById('stat-alunos').textContent = STATE.alunos.length || diag.total_crachas || '0';
-        document.getElementById('stat-turmas').textContent = Object.keys(STATE.turmas).length || '0';
-        document.getElementById('stat-gerados').textContent = diag.total_crachas || '0';
-        document.getElementById('stat-planilha').textContent = STATE.planilhaCarregada ? '✅' : '—';
-
-        // Últimos crachás
-        const container = document.getElementById('ultimos-crachas');
-        if (diag.crachas_montados && diag.crachas_montados.length > 0) {
-            const recentes = diag.crachas_montados.slice(-8).reverse();
-            container.innerHTML = `
-                <div class="result-grid">
-                    ${recentes.map(c => `
-                        <div class="result-item">
-                            <span class="nome">${c.nome}</span>
-                            <span class="meta">${c.turma} • ${(c.tamanho_kb || 0).toFixed(1)}KB</span>
-                            <span class="meta">${c.formato.toUpperCase()}</span>
-                        </div>
-                    `).join('')}
-                </div>
-            `;
-        } else {
-            container.innerHTML = '<p class="text-muted">Nenhum crachá gerado ainda.</p>';
-        }
-    } catch (err) {
-        console.error('Erro ao carregar dashboard:', err);
+        const data = await API.get('/api/alunos');
+        aplicarAlunos(data);
+    } catch (erro) {
+        console.error('Falha ao restaurar o estado ativo:', erro);
     }
 }
 
-// ===== IMPORTAR PLANILHA =====
-function handleFileSelect(event) {
-    const file = event.target.files[0];
-    if (file) processarArquivo(file);
-}
-
-function handleDrop(event) {
-    event.preventDefault();
-    document.getElementById('uploadZone').classList.remove('drag-over');
-    const file = event.dataTransfer.files[0];
-    if (file) processarArquivo(file);
-}
-
-async function processarArquivo(file) {
-    if (!file) return;
-
-    const formData = new FormData();
-    formData.append('arquivo', file);
-
+async function carregarDadosIEMA() {
     try {
-        mostrarToast('Lendo planilha...', 'info');
-        const data = await API.upload('/api/planilha/colunas', formData);
+        mostrarToast('Carregando a planilha padrão do IEMA...', 'info');
+        const data = await API.post('/api/planilha-padrao');
+        const estadoCompleto = await API.get('/api/alunos');
+        aplicarAlunos(estadoCompleto);
+        montarPreviewImportacao(data);
+        mudarAba('alunos');
+        mostrarToast(`${data.total_alunos} alunos carregados.`, 'success');
+    } catch (erro) {
+        mostrarToast(erro.message, 'error');
+    }
+}
 
-        // Salvar estado
-        STATE.alunos = data.preview || [];
-        STATE.turmas = data.turmas || {};
-        STATE.planilhaCarregada = true;
-
-        // Atualizar badge
-        document.getElementById('badge-alunos').textContent = data.total_alunos;
-
-        // Mostrar preview
-        const previewArea = document.getElementById('previewArea');
-        previewArea.style.display = 'block';
-
-        document.getElementById('previewStats').textContent =
-            `${data.total_alunos} alunos • ${data.total_turmas} turmas`;
-
-        // Renderizar tabela de preview
-        const table = document.getElementById('previewTable');
-        const thead = table.querySelector('thead tr');
-        const tbody = table.querySelector('tbody');
-
-        // Cabeçalho
-        const colunas = Object.keys(data.colunas_detectadas);
-        thead.innerHTML = colunas.map(c =>
-            `<th>${c.charAt(0).toUpperCase() + c.slice(1)}</th>`
-        ).join('') + '<th>Ações</th>';
-
-        // Dados
-        tbody.innerHTML = data.preview.map((a, i) => `
-            <tr>
-                <td>${a.nome}</td>
-                <td>${a.turma}</td>
-                <td>${a.curso}</td>
-                <td>${a.matricula}</td>
-                <td>
-                    <span title="${a.tem_foto ? 'Com foto' : 'Sem foto'}">
-                        ${a.tem_foto ? '📸' : '👤'}
-                    </span>
-                    <span title="${a.tem_qr ? 'Com QR' : 'Sem QR'}">
-                        ${a.tem_qr ? '📱' : '—'}
-                    </span>
-                </td>
-            </tr>
-        `).join('');
-
-        mostrarToast(`✅ ${data.total_alunos} alunos encontrados!`, 'success');
-
-    } catch (err) {
-        mostrarToast(`❌ ${err.message}`, 'error');
+async function processarArquivo(arquivo) {
+    if (!arquivo) return;
+    const form = new FormData();
+    form.append('arquivo', arquivo);
+    try {
+        mostrarToast('Lendo a planilha...', 'info');
+        const data = await API.upload('/api/planilha/colunas', form);
+        STATE.importacaoPendente = data.upload_id;
+        montarPreviewImportacao(data);
+        porId('btnConfirmarImportacao').disabled = false;
+        mostrarToast(`${data.total_alunos} alunos encontrados. Confirme para ativar.`, 'success');
+    } catch (erro) {
+        mostrarToast(erro.message, 'error');
     }
 }
 
 async function confirmarImportacao() {
-    try {
-        // Recarregar dados completos
-        const data = await API.get('/api/alunos');
-        STATE.alunos = data.alunos || [];
-
-        // Atualizar interface
-        document.getElementById('badge-alunos').textContent = data.total;
-        document.getElementById('stat-alunos').textContent = data.total;
-        document.getElementById('stat-planilha').textContent = '✅';
-
-        preencherFiltrosTurma();
-
-        // Carregar preview alunos
-        carregarPreviewAlunos();
-
-        mostrarToast(`✅ ${data.total} alunos importados com sucesso!`, 'success');
-        mudarAba('alunos');
-    } catch (err) {
-        mostrarToast(`❌ ${err.message}`, 'error');
-    }
-}
-
-function cancelarImportacao() {
-    document.getElementById('previewArea').style.display = 'none';
-    document.getElementById('fileInput').value = '';
-}
-
-async function handleFotosSelect(event) {
-    const arquivos = [...event.target.files];
-    if (arquivos.length === 0) return;
-
-    const botao = document.getElementById('btnSelecionarFotos');
-    const status = document.getElementById('fotosUploadStatus');
-    botao.disabled = true;
-    botao.textContent = 'Enviando fotos...';
-    status.textContent = `${arquivos.length} arquivo(s) selecionado(s)`;
-
-    try {
-        let totalSalvas = 0;
-        let totalErros = 0;
-        const tamanhoLote = 20;
-        for (let inicio = 0; inicio < arquivos.length; inicio += tamanhoLote) {
-            const lote = arquivos.slice(inicio, inicio + tamanhoLote);
-            const formData = new FormData();
-            lote.forEach(arquivo => formData.append('fotos', arquivo));
-            status.textContent = `Enviando ${Math.min(inicio + lote.length, arquivos.length)} de ${arquivos.length}...`;
-            const data = await API.upload('/api/fotos', formData);
-            totalSalvas += data.total_salvas;
-            totalErros += data.erros?.length || 0;
-        }
-        status.textContent = `${totalSalvas} foto(s) importada(s)` +
-            (totalErros ? `; ${totalErros} arquivo(s) ignorado(s)` : '');
-        mostrarToast(`✅ ${totalSalvas} foto(s) prontas para os crachás!`, 'success');
-    } catch (err) {
-        status.textContent = err.message;
-        mostrarToast(`❌ ${err.message}`, 'error');
-    } finally {
-        botao.disabled = false;
-        botao.textContent = 'Selecionar Fotos';
-        event.target.value = '';
-    }
-}
-
-// ===== ALUNOS =====
-function renderizarAlunos() {
-    const busca = document.getElementById('searchAluno').value.toLowerCase();
-    const turmaFiltro = document.getElementById('filterTurma').value;
-
-    let alunos = STATE.alunos;
-
-    if (turmaFiltro) alunos = alunos.filter(a => a.turma === turmaFiltro);
-    if (busca) alunos = alunos.filter(a =>
-        a.nome.toLowerCase().includes(busca) ||
-        (a.matricula && a.matricula.toLowerCase().includes(busca))
-    );
-
-    const tbody = document.getElementById('alunosBody');
-
-    if (alunos.length === 0) {
-        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;padding:2rem;color:var(--text-muted)">
-            Nenhum aluno encontrado. Importe uma planilha primeiro.
-        </td></tr>`;
-        document.getElementById('alunosCount').textContent = '0 alunos';
+    if (!STATE.importacaoPendente) {
+        mostrarToast('Selecione uma planilha antes de confirmar.', 'error');
         return;
     }
-
-    tbody.innerHTML = alunos.map(a => `
-        <tr>
-            <td><input type="checkbox" class="aluno-check"
-                value="${a.nome}"
-                ${STATE.alunosSelecionados.has(a.nome) ? 'checked' : ''}
-                onchange="toggleAluno('${a.nome}')"></td>
-            <td><strong>${a.nome}</strong></td>
-            <td>${a.turma}</td>
-            <td>${a.curso}</td>
-            <td>${a.matricula || '—'}</td>
-            <td>
-                <button class="btn btn-outline" style="padding:0.25rem 0.5rem;font-size:0.75rem"
-                    onclick="previewAlunoEspecifico('${a.nome}')">👁️</button>
-            </td>
-        </tr>
-    `).join('');
-
-    document.getElementById('alunosCount').textContent = `${alunos.length} alunos`;
-    atualizarGerarInfo();
-}
-
-function filtrarAlunos() {
-    renderizarAlunos();
-}
-
-function toggleAluno(nome) {
-    if (STATE.alunosSelecionados.has(nome)) {
-        STATE.alunosSelecionados.delete(nome);
-    } else {
-        STATE.alunosSelecionados.add(nome);
+    try {
+        const data = await API.post('/api/planilha/confirmar', { upload_id: STATE.importacaoPendente });
+        STATE.importacaoPendente = null;
+        aplicarAlunos(data);
+        porId('previewArea').style.display = 'none';
+        porId('fileInput').value = '';
+        mudarAba('alunos');
+        mostrarToast(`${data.total} alunos importados com sucesso.`, 'success');
+    } catch (erro) {
+        mostrarToast(erro.message, 'error');
     }
+}
+
+async function cancelarImportacao() {
+    try {
+        if (STATE.importacaoPendente) {
+            await API.post('/api/planilha/cancelar', { upload_id: STATE.importacaoPendente });
+        }
+    } catch (erro) {
+        mostrarToast(erro.message, 'error');
+        return;
+    }
+    STATE.importacaoPendente = null;
+    porId('previewArea').style.display = 'none';
+    porId('fileInput').value = '';
+    mostrarToast('Importação cancelada. A planilha ativa foi preservada.', 'info');
+}
+
+async function enviarLoteFotos(lote, substituir = false) {
+    const form = new FormData();
+    lote.forEach(arquivo => form.append('fotos', arquivo));
+    if (substituir) form.append('substituir', 'true');
+    return API.upload('/api/fotos', form);
+}
+
+async function handleFotosSelect(evento) {
+    const arquivos = [...evento.target.files];
+    if (!arquivos.length) return;
+    const botao = porId('btnSelecionarFotos');
+    const status = porId('fotosUploadStatus');
+    botao.disabled = true;
+    let salvas = 0;
+    let erros = 0;
+    try {
+        for (let inicio = 0; inicio < arquivos.length; inicio += 20) {
+            const lote = arquivos.slice(inicio, inicio + 20);
+            status.textContent = `Enviando ${Math.min(inicio + lote.length, arquivos.length)} de ${arquivos.length}...`;
+            try {
+                const data = await enviarLoteFotos(lote);
+                salvas += data.total_salvas || 0;
+                erros += data.erros?.length || 0;
+                if (data.conflitos?.length) {
+                    const nomes = new Set((data.erros || [])
+                        .filter(item => String(item.erro).includes('existe'))
+                        .map(item => item.arquivo));
+                    const conflitantes = lote.filter(arquivo => nomes.has(arquivo.name));
+                    if (conflitantes.length && confirm(`${conflitantes.length} foto(s) já existem. Deseja substituí-las?`)) {
+                        const substituidas = await enviarLoteFotos(conflitantes, true);
+                        salvas += substituidas.total_salvas || 0;
+                        erros -= conflitantes.length;
+                        erros += substituidas.erros?.length || 0;
+                    }
+                }
+            } catch (erro) {
+                if (erro.status !== 409) throw erro;
+                const nomes = new Set((erro.data.erros || [])
+                    .filter(item => String(item.erro).includes('existe'))
+                    .map(item => item.arquivo));
+                const conflitantes = lote.filter(arquivo => nomes.has(arquivo.name));
+                if (conflitantes.length && confirm(`${conflitantes.length} foto(s) já existem. Deseja substituí-las?`)) {
+                    const data = await enviarLoteFotos(conflitantes, true);
+                    salvas += data.total_salvas || 0;
+                    erros += data.erros?.length || 0;
+                } else {
+                    erros += conflitantes.length || lote.length;
+                }
+            }
+        }
+        status.textContent = `${salvas} foto(s) importada(s)${erros ? `; ${erros} ignorada(s)` : ''}.`;
+        mostrarToast(`${salvas} foto(s) prontas para uso.`, 'success');
+    } catch (erro) {
+        status.textContent = erro.message;
+        mostrarToast(erro.message, 'error');
+    } finally {
+        botao.disabled = false;
+        evento.target.value = '';
+    }
+}
+
+function alunosVisiveis() {
+    const busca = porId('searchAluno').value.trim().toLocaleLowerCase('pt-BR');
+    const turma = porId('filterTurma').value;
+    return STATE.alunos.filter(aluno => {
+        const correspondeTurma = !turma || aluno.turma === turma;
+        const texto = `${aluno.nome} ${aluno.codigo || aluno.matricula || ''}`.toLocaleLowerCase('pt-BR');
+        return correspondeTurma && (!busca || texto.includes(busca));
+    });
+}
+
+function renderizarAlunos() {
+    const corpo = porId('alunosBody');
+    limpar(corpo);
+    const alunos = alunosVisiveis();
+    if (!alunos.length) {
+        const linha = document.createElement('tr');
+        const celula = criar('td', 'Nenhum aluno encontrado.', 'estado-tabela-vazia');
+        celula.colSpan = 6;
+        linha.appendChild(celula);
+        corpo.appendChild(linha);
+    }
+    alunos.forEach(aluno => {
+        const codigo = String(aluno.codigo || aluno.matricula || '');
+        const linha = document.createElement('tr');
+        const selecao = document.createElement('input');
+        selecao.type = 'checkbox';
+        selecao.className = 'aluno-check';
+        selecao.value = codigo;
+        selecao.checked = STATE.alunosSelecionados.has(codigo);
+        selecao.setAttribute('aria-label', `Selecionar ${aluno.nome}`);
+        selecao.addEventListener('change', () => {
+            if (selecao.checked) STATE.alunosSelecionados.add(codigo);
+            else STATE.alunosSelecionados.delete(codigo);
+            atualizarGerarInfo();
+        });
+        const celulaSelecao = document.createElement('td');
+        celulaSelecao.appendChild(selecao);
+        linha.appendChild(celulaSelecao);
+        const nome = document.createElement('td');
+        nome.appendChild(criar('strong', aluno.nome));
+        linha.appendChild(nome);
+        [aluno.turma, aluno.curso, codigo || '—'].forEach(valor => linha.appendChild(criar('td', valor || '—')));
+        const acao = document.createElement('td');
+        const botao = criar('button', '👁️', 'btn btn-outline btn-icon');
+        botao.type = 'button';
+        botao.setAttribute('aria-label', `Visualizar crachá de ${aluno.nome}`);
+        botao.addEventListener('click', () => previewAlunoEspecifico(codigo));
+        acao.appendChild(botao);
+        linha.appendChild(acao);
+        corpo.appendChild(linha);
+    });
+    porId('alunosCount').textContent = `${alunos.length} aluno(s)`;
+    porId('selectAll').checked = alunos.length > 0 && alunos.every(a =>
+        STATE.alunosSelecionados.has(String(a.codigo || a.matricula || '')));
     atualizarGerarInfo();
 }
 
 function selecionarTodos() {
-    const checked = document.getElementById('selectAll').checked;
-    document.querySelectorAll('.aluno-check').forEach(cb => {
-        cb.checked = checked;
-        const nome = cb.value;
-        if (checked) STATE.alunosSelecionados.add(nome);
-        else STATE.alunosSelecionados.delete(nome);
+    const marcar = porId('selectAll').checked;
+    alunosVisiveis().forEach(aluno => {
+        const codigo = String(aluno.codigo || aluno.matricula || '');
+        if (marcar) STATE.alunosSelecionados.add(codigo);
+        else STATE.alunosSelecionados.delete(codigo);
     });
-    atualizarGerarInfo();
+    renderizarAlunos();
 }
 
-function atualizarGerarInfo() {
-    const turma = document.getElementById('gerarTurma')?.value || '';
-    let alunos = turma
-        ? STATE.alunos.filter(a => a.turma === turma)
-        : STATE.alunos;
-    if (STATE.alunosSelecionados.size > 0) {
-        alunos = alunos.filter(a => STATE.alunosSelecionados.has(a.nome));
-    }
-    const total = alunos.length;
-    document.getElementById('gerar-total').textContent = total;
-    const btnPdfTurma = document.getElementById('btnPdfTurma');
-    if (btnPdfTurma) {
-        const turmaTemAlunos = turma && STATE.alunos.some(a => a.turma === turma);
-        btnPdfTurma.disabled = !turmaTemAlunos;
-        btnPdfTurma.title = turmaTemAlunos
-            ? `Exportar todos os crachás da turma ${turma}`
-            : 'Selecione uma turma para exportar';
-    }
+function preencherSelectTurmas(select, primeiroRotulo) {
+    const atual = select.value;
+    limpar(select);
+    select.add(new Option(primeiroRotulo, ''));
+    const turmas = [...new Set(STATE.alunos.map(a => a.turma).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
+    turmas.forEach(turma => select.add(new Option(turma, turma)));
+    select.value = turmas.includes(atual) ? atual : '';
+}
+
+function alunosDaTurmaGeracao() {
+    const turma = porId('gerarTurma').value;
+    const alunos = turma ? STATE.alunos.filter(a => a.turma === turma) : [...STATE.alunos];
+    return alunos.sort((a, b) => String(a.nome).localeCompare(String(b.nome), 'pt-BR'));
+}
+
+function preencherSelectAlunosGeracao() {
+    const select = porId('gerarAluno');
+    const atual = select.value;
+    const turma = porId('gerarTurma').value;
+    const alunos = alunosDaTurmaGeracao();
+    limpar(select);
+    select.add(new Option(turma ? 'Todos os alunos da turma' : 'Todos os alunos', ''));
+    alunos.forEach(aluno => {
+        const codigo = String(aluno.codigo || aluno.matricula || '');
+        const rotulo = turma ? aluno.nome : `${aluno.nome} - ${aluno.turma || 'Sem turma'}`;
+        select.add(new Option(rotulo, codigo));
+    });
+    select.value = alunos.some(aluno => String(aluno.codigo || aluno.matricula || '') === atual) ? atual : '';
+    select.disabled = !alunos.length;
 }
 
 function preencherFiltrosTurma() {
-    const turmas = [...new Set(STATE.alunos.map(a => a.turma).filter(Boolean))]
-        .sort((a, b) => a.localeCompare(b, 'pt-BR', { numeric: true }));
-    const opcoes = turmas.map(t => `<option value="${t}">${t}</option>`).join('');
-    const filtroAlunos = document.getElementById('filterTurma');
-    const filtroGeracao = document.getElementById('gerarTurma');
-    if (filtroAlunos) {
-        const valorAtual = filtroAlunos.value;
-        filtroAlunos.innerHTML = '<option value="">Todas as turmas</option>' + opcoes;
-        filtroAlunos.value = turmas.includes(valorAtual) ? valorAtual : '';
+    preencherSelectTurmas(porId('filterTurma'), 'Todas as turmas');
+    preencherSelectTurmas(porId('gerarTurma'), 'Todas as turmas');
+    preencherSelectAlunosGeracao();
+}
+
+function alunosParaGerar() {
+    const turma = porId('gerarTurma').value;
+    const alunoSelecionado = porId('gerarAluno').value;
+    let alunos = turma ? STATE.alunos.filter(a => a.turma === turma) : [...STATE.alunos];
+    if (alunoSelecionado) {
+        alunos = alunos.filter(a => String(a.codigo || a.matricula || '') === alunoSelecionado);
+    } else if (STATE.alunosSelecionados.size) {
+        alunos = alunos.filter(a => STATE.alunosSelecionados.has(String(a.codigo || a.matricula || '')));
     }
-    if (filtroGeracao) {
-        const valorAtual = filtroGeracao.value;
-        filtroGeracao.innerHTML = '<option value="">Todas as turmas</option>' + opcoes;
-        filtroGeracao.value = turmas.includes(valorAtual) ? valorAtual : '';
+    return alunos;
+}
+
+function atualizarGerarInfo() {
+    const alunos = alunosParaGerar();
+    const turma = porId('gerarTurma').value;
+    const totalTurma = alunosDaTurmaGeracao().length;
+    const alunoSelecionado = porId('gerarAluno').value;
+    porId('gerar-total').textContent = String(alunos.length);
+    porId('btnGerar').textContent = alunoSelecionado ? '🚀 GERAR CRACHÁ DO ALUNO' : '🚀 GERAR CRACHÁS';
+    const pdf = porId('btnPdfTurma');
+    pdf.disabled = !turma || !totalTurma;
+    pdf.title = pdf.disabled ? 'Selecione uma turma com alunos' : `Exportar a turma ${turma}`;
+}
+
+let requisicaoCrachasTurma = 0;
+async function carregarCrachasDaTurma() {
+    const turma = porId('gerarTurma').value;
+    const conteudo = porId('crachasFiltradosConteudo');
+    const titulo = porId('crachasFiltradosTitulo');
+    const contador = porId('crachasFiltradosTotal');
+    const numero = ++requisicaoCrachasTurma;
+    const botaoArquivar = porId('btnArquivarObsoletos');
+    botaoArquivar.disabled = true;
+    limpar(conteudo);
+    contador.textContent = '';
+    if (!turma) {
+        titulo.textContent = 'Crachás gerados por turma';
+        conteudo.className = 'crachas-estado-vazio';
+        conteudo.textContent = 'Selecione uma turma para visualizar os crachás já gerados.';
+        return;
+    }
+    titulo.textContent = `Crachás gerados — turma ${turma}`;
+    conteudo.className = 'crachas-estado-vazio';
+    conteudo.textContent = 'Carregando crachás...';
+    try {
+        const data = await API.get(`/api/crachas?turma=${encodeURIComponent(turma)}`);
+        if (numero !== requisicaoCrachasTurma) return;
+        const crachas = data.crachas || [];
+        const reconciliacao = await API.get(`/api/reconciliacao?turma=${encodeURIComponent(turma)}`);
+        if (numero !== requisicaoCrachasTurma) return;
+        botaoArquivar.disabled = !reconciliacao.total_obsoletos;
+        botaoArquivar.title = reconciliacao.total_obsoletos
+            ? `Arquivar ${reconciliacao.total_obsoletos} arquivo(s) que não pertencem à turma ativa`
+            : 'Nenhum arquivo obsoleto encontrado';
+        contador.textContent = `${crachas.length} crachá(s)`;
+        limpar(conteudo);
+        if (!crachas.length) {
+            conteudo.className = 'crachas-estado-vazio crachas-estado-aviso';
+            conteudo.append(
+                criar('strong', `Nenhum crachá foi gerado para a turma ${turma}.`),
+                criar('span', 'Selecione os alunos e use “Gerar Crachás” para criar os arquivos.')
+            );
+            return;
+        }
+        conteudo.className = 'crachas-galeria';
+        crachas.forEach(cracha => {
+            const link = document.createElement('a');
+            link.className = 'cracha-galeria-item';
+            link.href = cracha.url;
+            link.target = '_blank';
+            link.rel = 'noopener';
+            const visual = criar('div', '', 'cracha-galeria-preview');
+            if (['png', 'jpg', 'jpeg'].includes(String(cracha.formato).toLowerCase())) {
+                const imagem = document.createElement('img');
+                imagem.src = `${cracha.url}?v=${Date.now()}`;
+                imagem.alt = `Crachá de ${cracha.nome}`;
+                imagem.loading = 'lazy';
+                visual.appendChild(imagem);
+            } else {
+                visual.appendChild(criar('div', `📄 ${String(cracha.formato).toUpperCase()}`, 'cracha-arquivo-icone'));
+            }
+            link.append(visual, criar('strong', cracha.nome), criar('span',
+                `${String(cracha.formato).toUpperCase()} • ${Number(cracha.tamanho_kb || 0).toFixed(1)} KB`));
+            conteudo.appendChild(link);
+        });
+    } catch (erro) {
+        if (numero !== requisicaoCrachasTurma) return;
+        conteudo.className = 'crachas-estado-vazio crachas-estado-erro';
+        conteudo.textContent = `Não foi possível carregar os crachás: ${erro.message}`;
+    }
+}
+
+async function arquivarObsoletos() {
+    const turma = porId('gerarTurma').value;
+    if (!turma) return;
+    if (!confirm(`Arquivar os arquivos obsoletos da turma ${turma}? Eles permanecerão no disco para recuperação.`)) return;
+    try {
+        const data = await API.post('/api/arquivar-obsoletos', { turma });
+        mostrarToast(`${data.total} arquivo(s) movido(s) para o arquivo histórico.`, 'success');
+        await carregarCrachasDaTurma();
+    } catch (erro) {
+        mostrarToast(erro.message, 'error');
     }
 }
 
 function carregarFiltroGeracao() {
     preencherFiltrosTurma();
     atualizarGerarInfo();
+    carregarCrachasDaTurma();
 }
 
 function filtrarGeracaoPorTurma() {
+    preencherSelectAlunosGeracao();
     atualizarGerarInfo();
-    document.getElementById('resultadoGeracao').style.display = 'none';
+    porId('resultadoGeracao').style.display = 'none';
+    carregarCrachasDaTurma();
 }
 
-// ===== CONFIGURAÇÕES =====
+function filtrarGeracaoPorAluno() {
+    atualizarGerarInfo();
+    porId('resultadoGeracao').style.display = 'none';
+}
+
 function mudarFormato(input) {
     STATE.formato = input.value;
-    document.querySelectorAll('.radio-card').forEach(el => el.classList.remove('selected'));
-    input.closest('.radio-card').classList.add('selected');
-    document.getElementById('gerar-formato').textContent = input.value.toUpperCase();
+    document.querySelectorAll('.radio-card').forEach(card => card.classList.toggle('selected', card.contains(input)));
+    porId('gerar-formato').textContent = input.value.toUpperCase();
 }
 
-function atualizarCor(hex) {
-    if (/^#[0-9a-fA-F]{6}$/.test(hex)) {
-        STATE.corDestaque = hex;
-        document.getElementById('corDestaque').value = hex;
+function atualizarOpcoesCracha() {
+    STATE.mostrarFoto = porId('mostrarFoto').checked;
+    STATE.mostrarQR = porId('mostrarQR').checked;
+}
+
+function montarResultadoGeracao(data) {
+    const caixa = criar('div', '', 'card');
+    caixa.style.borderColor = data.total_erros ? 'var(--warning)' : 'var(--success)';
+    const cabecalho = criar('div', '', 'card-header');
+    cabecalho.appendChild(criar('h3',
+        data.total_erros ? `⚠️ ${data.total_gerados} gerados, ${data.total_erros} erro(s)`
+            : `✅ ${data.total_gerados} crachá(s) gerado(s)`));
+    const corpo = criar('div', '', 'card-body');
+    const caminho = criar('p');
+    caminho.append('Pasta: ', criar('code', data.pasta_saida));
+    corpo.appendChild(caminho);
+    const grade = criar('div', '', 'result-grid');
+    (data.resultados || []).forEach(item => {
+        const bloco = criar('div', '', 'result-item');
+        bloco.append(criar('span', item.nome, 'nome'),
+            criar('span', `${Number(item.tamanho_kb || 0).toFixed(1)} KB • ${String(item.formato).toUpperCase()}`, 'meta'));
+        grade.appendChild(bloco);
+    });
+    corpo.appendChild(grade);
+    if (data.erros?.length) {
+        const lista = criar('ul', '', 'texto-erro');
+        data.erros.forEach(item => lista.appendChild(criar('li', `${item.nome}: ${item.erro}`)));
+        corpo.appendChild(lista);
     }
+    caixa.append(cabecalho, corpo);
+    const resultado = porId('resultadoGeracao');
+    limpar(resultado);
+    resultado.appendChild(caixa);
+    resultado.style.display = 'block';
 }
 
-function atualizarPreview() {
-    STATE.mostrarFoto = document.getElementById('mostrarFoto').checked;
-    STATE.mostrarQR = document.getElementById('mostrarQR').checked;
-}
-
-// ===== GERAR CRACHÁS =====
 async function gerarCrachas() {
-    if (STATE.alunos.length === 0) {
-        mostrarToast('❌ Importe uma planilha primeiro!', 'error');
+    const alunos = alunosParaGerar();
+    if (!alunos.length) {
+        mostrarToast('Nenhum aluno corresponde ao filtro selecionado.', 'error');
         return;
     }
-
-    const turma = document.getElementById('gerarTurma').value;
-    const total = Number(document.getElementById('gerar-total').textContent);
-    if (total === 0) {
-        mostrarToast('❌ Nenhum aluno corresponde ao filtro selecionado.', 'error');
-        return;
-    }
-
-    const btn = document.getElementById('btnGerar');
-    btn.disabled = true;
-    btn.textContent = '⏳ Gerando...';
-
-    const progressContainer = document.getElementById('progressContainer');
-    const progressFill = document.getElementById('progressFill');
-    const progressText = document.getElementById('progressText');
-    progressContainer.style.display = 'block';
-
+    const botao = porId('btnGerar');
+    const barra = porId('progressFill');
+    botao.disabled = true;
+    botao.textContent = 'Gerando...';
+    porId('progressContainer').style.display = 'block';
+    barra.classList.add('indeterminate');
+    barra.style.width = '35%';
+    porId('progressText').textContent = `Gerando ${alunos.length} crachá(s)...`;
     try {
-        // Simular progresso
-        let progresso = 0;
-        const interval = setInterval(() => {
-            progresso = Math.min(progresso + 5, 90);
-            progressFill.style.width = `${progresso}%`;
-        }, 200);
-
         const data = await API.post('/api/gerar', {
             formato: STATE.formato,
-            cor_destaque: STATE.corDestaque,
             mostrar_foto: STATE.mostrarFoto,
             mostrar_qr: STATE.mostrarQR,
-            turma,
-            alunos: STATE.alunosSelecionados.size > 0
-                ? [...STATE.alunosSelecionados]
-                : [],
+            turma: porId('gerarTurma').value,
+            codigos: alunos.map(a => String(a.codigo || a.matricula || '')),
         });
-
-        clearInterval(interval);
-        progressFill.style.width = '100%';
-        progressText.textContent = '✅ Concluído!';
-
-        // Mostrar resultados
-        const resultadoDiv = document.getElementById('resultadoGeracao');
-        resultadoDiv.style.display = 'block';
-
-        if (data.total_erros > 0) {
-            resultadoDiv.innerHTML = `
-                <div class="card" style="border-color: var(--warning);">
-                    <div class="card-header">
-                        <h3>⚠️ ${data.total_gerados} gerados, ${data.total_erros} erros</h3>
-                    </div>
-                    <div class="card-body">
-                        <p>Pasta: <code>${data.pasta_saida}</code></p>
-                        <div class="result-grid" style="margin-top: 0.75rem;">
-                            ${data.resultados.map(r => `
-                                <div class="result-item">
-                                    <span class="nome">${r.nome}</span>
-                                    <span class="meta">${(r.tamanho_kb || 0).toFixed(1)}KB • ${r.formato.toUpperCase()}</span>
-                                </div>
-                            `).join('')}
-                        </div>
-                        ${data.erros.length > 0 ? `
-                            <div style="margin-top: 0.75rem; padding: 0.75rem; background: var(--error-bg); border-radius: var(--radius-sm);">
-                                <strong style="color: var(--error);">Erros:</strong>
-                                ${data.erros.map(e => `<p style="font-size:0.8rem;">• ${e.nome}: ${e.erro}</p>`).join('')}
-                            </div>
-                        ` : ''}
-                    </div>
-                </div>
-            `;
-        } else {
-            resultadoDiv.innerHTML = `
-                <div class="card" style="border-color: var(--success);">
-                    <div class="card-header">
-                        <h3>✅ ${data.total_gerados} crachás gerados com sucesso!</h3>
-                    </div>
-                    <div class="card-body">
-                        <p>Pasta: <code>${data.pasta_saida}</code></p>
-                        <div class="result-grid" style="margin-top: 0.75rem;">
-                            ${data.resultados.map(r => `
-                                <div class="result-item">
-                                    <span class="nome">${r.nome}</span>
-                                    <span class="meta">${(r.tamanho_kb || 0).toFixed(1)}KB • ${r.formato.toUpperCase()}</span>
-                                </div>
-                            `).join('')}
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-
-        mostrarToast(`✅ ${data.total_gerados} crachás gerados!`, 'success');
-        carregarDashboard();
-
-    } catch (err) {
-        progressFill.style.width = '0%';
-        progressText.textContent = '❌ Erro ao gerar';
-        mostrarToast(`❌ ${err.message}`, 'error');
+        barra.classList.remove('indeterminate');
+        barra.style.width = '100%';
+        porId('progressText').textContent = 'Concluído.';
+        montarResultadoGeracao(data);
+        mostrarToast(`${data.total_gerados} crachá(s) gerado(s).`, data.total_erros ? 'warning' : 'success');
+        await Promise.all([carregarDashboard(), carregarCrachasDaTurma()]);
+    } catch (erro) {
+        barra.classList.remove('indeterminate');
+        barra.style.width = '0';
+        porId('progressText').textContent = 'Falha na geração.';
+        mostrarToast(erro.message, 'error');
     } finally {
-        btn.disabled = false;
-        btn.textContent = '🚀 GERAR CRACHÁS';
-    }
-}
-
-async function exportarPdfTurma() {
-    const turma = document.getElementById('gerarTurma').value;
-    if (!turma) {
-        mostrarToast('❌ Selecione uma turma específica para exportar o PDF.', 'error');
-        return;
-    }
-
-    const btn = document.getElementById('btnPdfTurma');
-    const progressContainer = document.getElementById('progressContainer');
-    const progressFill = document.getElementById('progressFill');
-    const progressText = document.getElementById('progressText');
-    btn.disabled = true;
-    btn.textContent = '⏳ Montando PDF...';
-    progressContainer.style.display = 'block';
-    progressFill.style.width = '25%';
-    progressText.textContent = `Organizando a turma ${turma} em folhas A4...`;
-
-    try {
-        const data = await API.post('/api/exportar-pdf-turma', {
-            turma,
-            cor_destaque: STATE.corDestaque,
-            mostrar_foto: document.getElementById('mostrarFoto').checked,
-            mostrar_qr: document.getElementById('mostrarQR').checked,
-        });
-
-        progressFill.style.width = '100%';
-        progressText.textContent = '✅ PDF pronto para impressão!';
-
-        const link = document.createElement('a');
-        link.href = `${data.download_url}?v=${Date.now()}`;
-        link.download = data.nome_arquivo;
-        document.body.appendChild(link);
-        link.click();
-        link.remove();
-
-        const resultadoDiv = document.getElementById('resultadoGeracao');
-        resultadoDiv.style.display = 'block';
-        resultadoDiv.innerHTML = `
-            <div class="card" style="border-color: var(--success);">
-                <div class="card-header">
-                    <h3>✅ PDF da turma ${data.turma} gerado!</h3>
-                </div>
-                <div class="card-body">
-                    <p><strong>${data.total_crachas}</strong> crachás em
-                       <strong>${data.total_paginas}</strong> página(s) A4 paisagem.</p>
-                    <p>Tamanho de cada crachá: <strong>${data.tamanho_cracha_mm} mm</strong>.</p>
-                    <p>Arquivo salvo: <code>${data.arquivo}</code></p>
-                    <a class="btn btn-outline" href="${data.download_url}" download="${data.nome_arquivo}">
-                        📥 Baixar novamente
-                    </a>
-                </div>
-            </div>`;
-        mostrarToast(`✅ PDF da turma ${turma} gerado!`, 'success');
-        carregarDashboard();
-    } catch (err) {
-        progressFill.style.width = '0%';
-        progressText.textContent = '❌ Erro ao exportar PDF';
-        mostrarToast(`❌ ${err.message}`, 'error');
-    } finally {
-        btn.textContent = '📄 EXPORTAR PDF DA TURMA';
+        botao.disabled = false;
         atualizarGerarInfo();
     }
 }
 
-// ===== PREVIEW =====
-function carregarPreviewAlunos() {
-    const select = document.getElementById('previewAluno');
-    const alunos = STATE.alunos;
-
-    if (alunos.length === 0) {
-        select.innerHTML = '<option value="">Nenhum aluno carregado</option>';
+async function exportarPdfTurma() {
+    const turma = porId('gerarTurma').value;
+    if (!turma) {
+        mostrarToast('Selecione uma turma específica para exportar.', 'error');
         return;
     }
-
-    select.innerHTML = '<option value="">Selecione um aluno</option>' +
-        alunos.map(a => `<option value="${a.nome}">${a.nome} - ${a.turma}</option>`).join('');
+    const botao = porId('btnPdfTurma');
+    botao.disabled = true;
+    botao.textContent = 'Montando PDF...';
+    try {
+        const data = await API.post('/api/exportar-pdf-turma', {
+            turma,
+            mostrar_foto: STATE.mostrarFoto,
+            mostrar_qr: STATE.mostrarQR,
+        });
+        const link = document.createElement('a');
+        link.href = data.download_url;
+        link.download = data.nome_arquivo;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        mostrarToast(`PDF da turma ${turma} gerado com ${data.total_crachas} crachá(s).`, 'success');
+    } catch (erro) {
+        mostrarToast(erro.message, 'error');
+    } finally {
+        botao.textContent = '📄 EXPORTAR PDF DA TURMA';
+        atualizarGerarInfo();
+    }
 }
 
-function previewAlunoEspecifico(nome) {
-    const select = document.getElementById('previewAluno');
-    select.value = nome;
+function carregarPreviewAlunos() {
+    const select = porId('previewAluno');
+    const atual = select.value;
+    limpar(select);
+    select.add(new Option(STATE.alunos.length ? 'Selecione um aluno' : 'Nenhum aluno carregado', ''));
+    STATE.alunos.forEach(aluno => {
+        const codigo = String(aluno.codigo || aluno.matricula || '');
+        select.add(new Option(`${aluno.nome} — ${aluno.turma}`, codigo));
+    });
+    if ([...select.options].some(opcao => opcao.value === atual)) select.value = atual;
+}
+
+function previewAlunoEspecifico(codigo) {
     mudarAba('visualizar');
+    porId('previewAluno').value = codigo;
     gerarPreview();
 }
 
 async function gerarPreview() {
-    const nome = document.getElementById('previewAluno').value;
-    if (!nome) return;
-
+    const codigo = porId('previewAluno').value;
+    if (!codigo) return;
     try {
         const data = await API.post('/api/gerar/preview', {
-            nome,
-            cor_destaque: STATE.corDestaque,
-            mostrar_foto: document.getElementById('mostrarFoto').checked,
-            mostrar_qr: document.getElementById('mostrarQR').checked,
+            codigo,
+            mostrar_foto: STATE.mostrarFoto,
+            mostrar_qr: STATE.mostrarQR,
         });
-
-        document.getElementById('previewPlaceholder').style.display = 'none';
-        const previewCracha = document.getElementById('previewCracha');
-        previewCracha.style.display = 'block';
-        document.getElementById('previewImagem').src = data.imagem;
-
-    } catch (err) {
-        mostrarToast(`❌ ${err.message}`, 'error');
+        porId('previewPlaceholder').style.display = 'none';
+        porId('previewCracha').style.display = 'block';
+        porId('previewImagem').src = data.imagem;
+        porId('previewImagem').alt = `Preview do crachá de ${data.nome}`;
+    } catch (erro) {
+        mostrarToast(erro.message, 'error');
     }
 }
 
-// ===== AÇÕES =====
+function adicionarLinhaDiagnostico(lista, rotulo, valor) {
+    const item = document.createElement('li');
+    item.append(criar('strong', `${rotulo}: `), document.createTextNode(String(valor)));
+    lista.appendChild(item);
+}
+
 async function abrirDiagnostico() {
     try {
         const data = await API.get('/api/diagnostico');
-        let html = '<div style="font-family: monospace; font-size: 0.85rem;">';
-
-        html += '<h4 style="margin-bottom: 0.75rem;">📁 Estrutura de Diretórios</h4>';
-        for (const [nome, info] of Object.entries(data.estrutura)) {
-            const status = info.existe ? '✅' : '❌';
-            html += `<div>${status} <strong>${nome}</strong>: ${info.caminho}</div>`;
+        const painel = criar('div', '', 'diagnostico');
+        const lista = document.createElement('ul');
+        adicionarLinhaDiagnostico(lista, 'Alunos ativos', data.total_alunos || 0);
+        adicionarLinhaDiagnostico(lista, 'Turmas', data.total_turmas || data.turmas?.length || 0);
+        adicionarLinhaDiagnostico(lista, 'Crachás gerados', data.total_crachas || 0);
+        adicionarLinhaDiagnostico(lista, 'Crachás ausentes', data.total_faltantes || 0);
+        adicionarLinhaDiagnostico(lista, 'Arquivos obsoletos', data.total_obsoletos || 0);
+        painel.appendChild(lista);
+        const ausentesEncontrados = (data.reconciliacao || []).flatMap(item =>
+            (item.faltantes || []).map(aluno => ({ ...aluno, turma: item.turma })));
+        if (ausentesEncontrados.length) {
+            painel.appendChild(criar('h4', 'Crachás ausentes'));
+            const ausentes = document.createElement('ul');
+            ausentesEncontrados.slice(0, 30).forEach(item =>
+                ausentes.appendChild(criar('li', `${item.codigo} — ${item.nome} (${item.turma})`)));
+            painel.appendChild(ausentes);
         }
-
-        html += `<h4 style="margin: 1rem 0 0.5rem;">🏫 Turmas (${data.turmas.length})</h4>`;
-        html += data.turmas.length > 0
-            ? data.turmas.map(t => `<div>• ${t}</div>`).join('')
-            : '<div class="text-muted">Nenhuma turma</div>';
-
-        html += `<h4 style="margin: 1rem 0 0.5rem;">✅ Crachás Gerados: ${data.total_crachas}</h4>`;
-        html += '</div>';
-
-        abrirModal('🔍 Diagnóstico do Sistema', html);
-    } catch (err) {
-        mostrarToast(`❌ ${err.message}`, 'error');
+        abrirModal('Diagnóstico do Sistema', painel);
+    } catch (erro) {
+        mostrarToast(erro.message, 'error');
     }
 }
 
 async function fazerBackup() {
     try {
-        const data = await API.post('/api/backup');
-        mostrarToast(`✅ Backup criado: ${data.caminho}`, 'success');
-    } catch (err) {
-        mostrarToast(`❌ ${err.message}`, 'error');
+        const incluirGerados = confirm('Deseja incluir também os crachás e PDFs gerados?');
+        const data = await API.post('/api/backup', { incluir_gerados: incluirGerados });
+        const valido = data.validacao?.valido !== false;
+        mostrarToast(valido ? `Backup validado: ${data.nome || data.caminho}` : 'O backup falhou na validação.', valido ? 'success' : 'error');
+    } catch (erro) {
+        mostrarToast(erro.message, 'error');
     }
 }
 
 async function baixarExemplo() {
-    window.open('/api/baixar-exemplo', '_blank');
-    mostrarToast('📝 Baixando arquivo modelo...', 'info');
-}
-
-// ===== HEALTH CHECK =====
-async function verificarConexao() {
     try {
-        const data = await API.get('/api/health');
-        document.getElementById('statusIndicator').style.background = 'var(--success)';
-        document.getElementById('statusText').textContent = `v${data.versao}`;
-    } catch (err) {
-        document.getElementById('statusIndicator').style.background = 'var(--error)';
-        document.getElementById('statusText').textContent = 'Desconectado';
+        const resposta = await fetch('/api/baixar-exemplo');
+        if (!resposta.ok) throw new Error('Não foi possível baixar o modelo.');
+        const blob = await resposta.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'modelo_alunos.xlsx';
+        link.click();
+        URL.revokeObjectURL(url);
+    } catch (erro) {
+        mostrarToast(erro.message, 'error');
     }
 }
 
-// ===== INICIALIZAÇÃO =====
-document.addEventListener('DOMContentLoaded', () => {
-    verificarConexao();
-    carregarDashboard();
+async function carregarDashboard() {
+    try {
+        const data = await API.get('/api/diagnostico');
+        porId('stat-alunos').textContent = String(data.total_alunos ?? STATE.alunos.length);
+        porId('stat-turmas').textContent = String(data.total_turmas ?? Object.keys(STATE.turmas).length);
+        porId('stat-gerados').textContent = String(data.total_crachas || 0);
+        porId('stat-planilha').textContent = data.planilha?.carregada || STATE.planilhaCarregada ? '✅' : '—';
+        const container = porId('ultimos-crachas');
+        limpar(container);
+        const recentes = (data.crachas_montados || []).slice(-8).reverse();
+        if (!recentes.length) {
+            container.appendChild(criar('p', 'Nenhum crachá gerado ainda.', 'text-muted'));
+            return;
+        }
+        const grade = criar('div', '', 'result-grid');
+        recentes.forEach(cracha => {
+            const item = criar('div', '', 'result-item');
+            item.append(criar('span', cracha.nome, 'nome'),
+                criar('span', `${cracha.turma} • ${Number(cracha.tamanho_kb || 0).toFixed(1)} KB`, 'meta'));
+            grade.appendChild(item);
+        });
+        container.appendChild(grade);
+    } catch (erro) {
+        console.error('Falha ao carregar o dashboard:', erro);
+    }
+}
 
-    // Verificar conexão a cada 30s
-    setInterval(verificarConexao, 30000);
+async function verificarConexao() {
+    try {
+        const data = await API.get('/api/health');
+        porId('statusIndicator').style.background = 'var(--success)';
+        porId('statusText').textContent = `v${data.versao}`;
+    } catch {
+        porId('statusIndicator').style.background = 'var(--error)';
+        porId('statusText').textContent = 'Desconectado';
+    }
+}
 
-    // Fechar sidebar ao clicar fora (mobile)
-    document.addEventListener('click', (e) => {
-        const sidebar = document.getElementById('sidebar');
-        const toggle = document.querySelector('.menu-toggle');
-        if (window.innerWidth <= 768 &&
-            !sidebar.contains(e.target) &&
-            !toggle.contains(e.target)) {
-            sidebar.classList.remove('open');
+function registrarEventos() {
+    document.querySelectorAll('[data-tab], [data-go-tab]').forEach(botao => {
+        botao.addEventListener('click', () => mudarAba(botao.dataset.tab || botao.dataset.goTab));
+    });
+    porId('menuToggle').addEventListener('click', () => atualizarMenuMobile(!porId('sidebar').classList.contains('open')));
+    [porId('navCarregarIema'), porId('btnCarregarIemaDashboard')].forEach(el => el.addEventListener('click', carregarDadosIEMA));
+    [porId('btnDiagnosticoNav'), porId('btnDiagnosticoDashboard')].forEach(el => el.addEventListener('click', abrirDiagnostico));
+    porId('btnBackupNav').addEventListener('click', fazerBackup);
+    porId('btnBaixarExemplo').addEventListener('click', baixarExemplo);
+    porId('btnSelecionarPlanilha').addEventListener('click', () => porId('fileInput').click());
+    porId('fileInput').addEventListener('change', evento => processarArquivo(evento.target.files[0]));
+    const zona = porId('uploadZone');
+    zona.addEventListener('click', evento => { if (evento.target === zona || evento.target.tagName !== 'BUTTON') porId('fileInput').click(); });
+    zona.addEventListener('keydown', evento => {
+        if (evento.key === 'Enter' || evento.key === ' ') { evento.preventDefault(); porId('fileInput').click(); }
+    });
+    ['dragenter', 'dragover'].forEach(tipo => zona.addEventListener(tipo, evento => {
+        evento.preventDefault();
+        zona.classList.add('drag-over');
+    }));
+    ['dragleave', 'drop'].forEach(tipo => zona.addEventListener(tipo, evento => {
+        evento.preventDefault();
+        zona.classList.remove('drag-over');
+    }));
+    zona.addEventListener('drop', evento => processarArquivo(evento.dataTransfer.files[0]));
+    porId('btnConfirmarImportacao').addEventListener('click', confirmarImportacao);
+    porId('btnCancelarImportacao').addEventListener('click', cancelarImportacao);
+    porId('btnSelecionarFotos').addEventListener('click', () => porId('fotosInput').click());
+    porId('fotosInput').addEventListener('change', handleFotosSelect);
+    porId('searchAluno').addEventListener('input', renderizarAlunos);
+    porId('filterTurma').addEventListener('change', renderizarAlunos);
+    porId('selectAll').addEventListener('change', selecionarTodos);
+    document.querySelectorAll('input[name="formato"]').forEach(input =>
+        input.addEventListener('change', () => mudarFormato(input)));
+    [porId('mostrarFoto'), porId('mostrarQR')].forEach(input =>
+        input.addEventListener('change', atualizarOpcoesCracha));
+    porId('gerarTurma').addEventListener('change', filtrarGeracaoPorTurma);
+    porId('gerarAluno').addEventListener('change', filtrarGeracaoPorAluno);
+    porId('btnGerar').addEventListener('click', gerarCrachas);
+    porId('btnPdfTurma').addEventListener('click', exportarPdfTurma);
+    porId('btnArquivarObsoletos').addEventListener('click', arquivarObsoletos);
+    porId('btnPreview').addEventListener('click', () => {
+        const candidato = alunosParaGerar()[0];
+        if (!candidato) return mostrarToast('Nenhum aluno disponível para visualizar.', 'error');
+        previewAlunoEspecifico(String(candidato.codigo || candidato.matricula || ''));
+    });
+    porId('previewAluno').addEventListener('change', gerarPreview);
+    porId('modalClose').addEventListener('click', fecharModal);
+    porId('modalOverlay').addEventListener('click', evento => { if (evento.target === porId('modalOverlay')) fecharModal(); });
+    document.addEventListener('keydown', evento => {
+        if (evento.key === 'Escape' && !porId('modalOverlay').hidden) fecharModal();
+        if (evento.key === 'Tab' && !porId('modalOverlay').hidden) {
+            const elementos = [...porId('modalOverlay').querySelectorAll('button, a, input, select, [tabindex]:not([tabindex="-1"])')];
+            if (!elementos.length) return;
+            const primeiro = elementos[0];
+            const ultimo = elementos[elementos.length - 1];
+            if (evento.shiftKey && document.activeElement === primeiro) { evento.preventDefault(); ultimo.focus(); }
+            else if (!evento.shiftKey && document.activeElement === ultimo) { evento.preventDefault(); primeiro.focus(); }
         }
     });
+    window.addEventListener('hashchange', () => mudarAba(location.hash.slice(1) || 'dashboard', false));
+    document.addEventListener('click', evento => {
+        if (window.innerWidth <= 768 && !porId('sidebar').contains(evento.target) && !porId('menuToggle').contains(evento.target)) {
+            atualizarMenuMobile(false);
+        }
+    });
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+    registrarEventos();
+    atualizarOpcoesCracha();
+    await Promise.all([verificarConexao(), carregarEstadoAtivo()]);
+    mudarAba(location.hash.slice(1) || 'dashboard', false);
+    setInterval(verificarConexao, 30000);
 });

@@ -22,6 +22,7 @@ class FotoHandler:
     def __init__(self):
         self.tamanho_foto_mm = (LAYOUT["FOTO_X"], LAYOUT["FOTO_Y"])
         self.tamanho_foto_px = self._mm_para_pixels(self.tamanho_foto_mm)
+        self.ultima_foto_caminho: Optional[Path] = None
 
     def _mm_para_pixels(self, tamanho_mm: tuple) -> tuple:
         """Converte milímetros para pixels."""
@@ -47,6 +48,7 @@ class FotoHandler:
             # Converter para RGB se necessário
             if img.mode in ("RGBA", "P"):
                 img = img.convert("RGB")
+            self.ultima_foto_caminho = caminho.resolve()
             return img
         except Exception as e:
             logger.error(f"Erro ao carregar foto {caminho}: {e}")
@@ -188,6 +190,7 @@ class FotoHandler:
                         return self.carregar_foto(arquivo)
 
         logger.warning(f"Foto não encontrada para: {nome}")
+        self.ultima_foto_caminho = None
         return None
 
     @staticmethod

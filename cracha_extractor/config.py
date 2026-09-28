@@ -1,7 +1,6 @@
 """
 Configurações gerais do sistema de crachás.
 """
-import os
 from pathlib import Path
 
 # Diretório raiz do projeto
@@ -19,6 +18,9 @@ DIRS = {
     "DIAG_ANTIGOS": BASE_DIR / "_diag_saida" / "arquivos_antigos",
     "DIAG_PREVIEWS": BASE_DIR / "_diag_saida" / "previews",
     "BACKUPS": BASE_DIR / "backups",
+    "DATA": BASE_DIR / "data",
+    "PLANILHAS": BASE_DIR / "data" / "planilhas",
+    "IMPORTACOES_PENDENTES": BASE_DIR / "data" / "pendentes",
 }
 
 # Configurações de layout do crachá (em milímetros)

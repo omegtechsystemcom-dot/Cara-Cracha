@@ -51,7 +51,6 @@ class ConfiguracaoCracha:
     """Configuração de layout do crachá para uma turma."""
     turma_nome: str
     cor_fundo: str = "#FFFFFF"
-    cor_destaque: str = "#1a5276"
     logo_caminho: Optional[Path] = None
     template_html: Optional[str] = None
     mostrar_foto: bool = True

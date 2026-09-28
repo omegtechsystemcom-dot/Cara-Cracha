@@ -87,9 +87,13 @@ class PlanilhaReader:
 
         # Carregar arquivo
         if self.caminho.suffix.lower() == ".csv":
-            self.df = pd.read_csv(self.caminho, encoding="utf-8-sig")
+            # Códigos são identificadores, não números. Ler como texto preserva
+            # zeros à esquerda (ex.: 000123), usados na foto, arquivo e QR.
+            self.df = pd.read_csv(
+                self.caminho, encoding="utf-8-sig", dtype=str, keep_default_na=False
+            )
         else:
-            self.df = pd.read_excel(self.caminho)
+            self.df = pd.read_excel(self.caminho, dtype=str, keep_default_na=False)
 
         # Detectar colunas
         self.colunas_mapeadas = self._detectar_colunas()
@@ -159,7 +163,12 @@ class PlanilhaReader:
         """Retorna a lista de colunas encontradas na planilha."""
         if self.df is None:
             if self.caminho.suffix.lower() == ".csv":
-                self.df = pd.read_csv(self.caminho, encoding="utf-8-sig", nrows=0)
+                self.df = pd.read_csv(
+                    self.caminho, encoding="utf-8-sig", nrows=0,
+                    dtype=str, keep_default_na=False,
+                )
             else:
-                self.df = pd.read_excel(self.caminho, nrows=0)
+                self.df = pd.read_excel(
+                    self.caminho, nrows=0, dtype=str, keep_default_na=False
+                )
         return list(self.df.columns)

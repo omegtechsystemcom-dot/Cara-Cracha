@@ -104,7 +104,8 @@ def test_menu_exibe_exportacao_pdf_por_turma():
     html = (api.BASE_DIR / "static" / "index.html").read_text(encoding="utf-8")
     javascript = (api.BASE_DIR / "static" / "app.js").read_text(encoding="utf-8")
     assert 'id="btnPdfTurma"' in html
-    assert "exportarPdfTurma()" in html
+    assert "porId('btnPdfTurma').addEventListener('click', exportarPdfTurma)" in javascript
+    assert "onclick=" not in html
     assert "/api/exportar-pdf-turma" in javascript
     assert "PDF individual" in html
 
