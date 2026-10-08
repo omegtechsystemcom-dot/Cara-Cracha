@@ -4,8 +4,6 @@ Gerador de QR Codes para os crachás.
 import logging
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote
-
 import qrcode
 from qrcode.image.pil import PilImage
 from PIL import Image
@@ -83,12 +81,4 @@ class QRCodeGenerator:
         if not codigo_normalizado:
             raise ValueError(f"Aluno sem codigo oficial: {nome}")
 
-        partes = [
-            "IEMA",
-            "V1",
-            f"COD={quote(codigo_normalizado, safe='-_.')}",
-            f"TURMA={quote(str(turma).strip().upper(), safe='-_.')}",
-        ]
-        if dados_extras and str(dados_extras).strip():
-            partes.append(f"DADOS={quote(str(dados_extras).strip(), safe='-_.:/')}")
-        return "|".join(partes)
+        return codigo_normalizado

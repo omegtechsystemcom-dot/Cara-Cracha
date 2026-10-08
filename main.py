@@ -23,7 +23,10 @@ def _garantir_venv():
     Verifica se está rodando no .venv. Se não estiver, executa
     automaticamente com o Python do ambiente virtual e encerra.
     """
-    venv_python = Path(__file__).parent / ".venv" / "Scripts" / "python.exe"
+    root = Path(__file__).parent
+    venv_python = root / ".venv-local" / "Scripts" / "python.exe"
+    if not venv_python.exists():
+        venv_python = root / ".venv" / "Scripts" / "python.exe"
     if not venv_python.exists():
         return  # Sem .venv, segue com o Python atual
 

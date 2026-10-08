@@ -16,7 +16,12 @@ class MontadorFalso:
     def montar(self, aluno):
         self.chamadas.append(aluno.nome)
         intensidade = 20 + len(self.chamadas)
-        return Image.new("RGB", (591, 1004), (intensidade, 0, 0))
+        mm_para_px = lambda mm: round(mm * LAYOUT["DPI"] / 25.4)
+        return Image.new(
+            "RGB",
+            (mm_para_px(LAYOUT["LARGURA"]), mm_para_px(LAYOUT["ALTURA"])),
+            (intensidade, 0, 0),
+        )
 
 
 def test_monta_a4_paisagem_com_dez_crachas_por_pagina_em_ordem_alfabetica():
@@ -34,7 +39,7 @@ def test_monta_a4_paisagem_com_dez_crachas_por_pagina_em_ordem_alfabetica():
         assert montador.chamadas == sorted(a.nome for a in alunos)
 
         mm_para_px = lambda mm: round(mm * LAYOUT["DPI"] / 25.4)
-        cracha_w, cracha_h = mm_para_px(50), mm_para_px(85)
+        cracha_w, cracha_h = mm_para_px(LAYOUT["LARGURA"]), mm_para_px(LAYOUT["ALTURA"])
         espaco = mm_para_px(3)
         margem_x = (3508 - (5 * cracha_w + 4 * espaco)) // 2
         margem_y = (2480 - (2 * cracha_h + espaco)) // 2

@@ -133,9 +133,9 @@ informar uma coluna `Foto` na planilha com um caminho como `fotos_alunos/maria_d
 
 ### Identificador dos QR Codes
 
-Cada QR Code usa obrigatoriamente o código do aluno lido da planilha. O conteúdo segue o
-formato versionado `IEMA|V1|COD=2024001|TURMA=101`. Se a planilha trouxer dados adicionais
-para o QR, eles são anexados ao conteúdo e não substituem o código oficial.
+Cada QR Code usa obrigatoriamente o código do aluno lido da planilha. O conteúdo do QR
+é somente o código oficial, por exemplo `2024001`, para manter compatibilidade direta com
+o leitor do sistema de frequência.
 
 Antes da geração, o sistema verifica os alunos selecionados e interrompe o processo quando
 encontra código vazio ou repetido. Assim, nenhum crachá com QR ambíguo é salvo.

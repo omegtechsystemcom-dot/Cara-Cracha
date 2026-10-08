@@ -34,7 +34,7 @@ class ExportadorCracha:
         caminho.parent.mkdir(parents=True, exist_ok=True)
 
         cracha_img = self.montador.montar(aluno)
-        cracha_img.save(caminho, "PNG")
+        cracha_img.save(caminho, "PNG", dpi=(LAYOUT["DPI"], LAYOUT["DPI"]))
         logger.info(f"Crachá PNG salvo: {caminho}")
         return caminho
 
@@ -46,7 +46,7 @@ class ExportadorCracha:
         cracha_img = self.montador.montar(aluno)
         if cracha_img.mode == "RGBA":
             cracha_img = cracha_img.convert("RGB")
-        cracha_img.save(caminho, "JPEG", quality=qualidade)
+        cracha_img.save(caminho, "JPEG", quality=qualidade, dpi=(LAYOUT["DPI"], LAYOUT["DPI"]))
         logger.info(f"Crachá JPG salvo: {caminho}")
         return caminho
 
@@ -114,7 +114,7 @@ class ExportadorCracha:
         dpi = LAYOUT["DPI"]
         mm_para_px = lambda mm: round(mm * dpi / 25.4)
         pagina_w, pagina_h = mm_para_px(297), mm_para_px(210)
-        cracha_w, cracha_h = mm_para_px(50), mm_para_px(85)
+        cracha_w, cracha_h = mm_para_px(LAYOUT["LARGURA"]), mm_para_px(LAYOUT["ALTURA"])
         espaco = mm_para_px(3)
         colunas, linhas = 5, 2
         grade_w = colunas * cracha_w + (colunas - 1) * espaco

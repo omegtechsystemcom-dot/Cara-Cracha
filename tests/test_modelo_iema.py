@@ -2,7 +2,7 @@
 import io
 import re
 from PIL import Image, ImageChops, ImageDraw
-from cracha_extractor.config import BASE_DIR, TEMPLATE_IEMA
+from cracha_extractor.config import BASE_DIR, LAYOUT, TEMPLATE_IEMA
 from cracha_extractor.models import Aluno, ConfiguracaoCracha
 from cracha_extractor.montador import MontadorCracha
 
@@ -19,7 +19,10 @@ def test_preserva_arte_fora_dos_campos():
         x1, y1, x2, y2 = TEMPLATE_IEMA[campo]
         draw.rectangle((x1, y1, x2-1, y2-1), fill=0)
     assert diferenca.getbbox() is None
-    assert imagem.size == original.size
+    assert imagem.size == (
+        round(LAYOUT["LARGURA"] * LAYOUT["DPI"] / 25.4),
+        round(LAYOUT["ALTURA"] * LAYOUT["DPI"] / 25.4),
+    )
     cores_qr = imagem.crop(TEMPLATE_IEMA['POS_QR']).getcolors(1000)
     assert {cor for _, cor in cores_qr} == {(0, 0, 0), (255, 255, 255)}
 

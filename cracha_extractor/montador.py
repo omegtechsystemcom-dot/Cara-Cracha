@@ -5,7 +5,7 @@ import io
 from typing import Optional
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import qrcode
-from .config import BASE_DIR, TEMPLATE_IEMA
+from .config import BASE_DIR, LAYOUT, TEMPLATE_IEMA
 from .models import Aluno, ConfiguracaoCracha
 from .foto_handler import FotoHandler
 from .qr_generator import QRCodeGenerator
@@ -40,6 +40,20 @@ class MontadorCracha:
         if fundo.size != (self.TEMPLATE_W, self.TEMPLATE_H):
             raise ValueError("O modelo IEMA deve ter 591 × 1004 pixels.")
         return fundo
+
+    @staticmethod
+    def _mm_para_px(mm: int | float) -> int:
+        return round(mm * LAYOUT["DPI"] / 25.4)
+
+    def _normalizar_dimensoes(self, cracha: Image.Image) -> Image.Image:
+        largura = self._mm_para_px(LAYOUT["LARGURA"])
+        altura = self._mm_para_px(LAYOUT["ALTURA"])
+        if cracha.size == (largura, altura):
+            return cracha
+        rotacionado = cracha.transpose(Image.Transpose.ROTATE_90)
+        if rotacionado.size == (largura, altura):
+            return rotacionado
+        return cracha.resize((largura, altura), Image.Resampling.LANCZOS)
 
     def _texto_na_area(self, draw, texto, area, tamanho, cor, linhas=1):
         """Ajusta fonte e quebra de linha sem truncar o nome."""
@@ -118,7 +132,7 @@ class MontadorCracha:
             imagem_qr = imagem_qr.resize((lado, lado), Image.Resampling.NEAREST)
             draw.rectangle((x1, y1, x2-1, y2-1), fill="white")
             cracha.paste(imagem_qr, (x1+(x2-x1-lado)//2, y1+(y2-y1-lado)//2))
-        return cracha
+        return self._normalizar_dimensoes(cracha)
 
     def montar_html(self, aluno: Aluno) -> str:
         """HTML portátil idêntico à prévia, sem depender de serviços externos."""
@@ -130,9 +144,9 @@ class MontadorCracha:
 <html lang="pt-BR">
 <head><meta charset="utf-8"><title>{descricao}</title>
 <style>
-@page {{ size: 50mm 85mm; margin: 0; }}
-html, body {{ margin: 0; padding: 0; width: 50mm; height: 85mm; }}
-img {{ display: block; width: 50mm; height: 85mm; }}
+@page {{ size: {LAYOUT["LARGURA"]}mm {LAYOUT["ALTURA"]}mm; margin: 0; }}
+html, body {{ margin: 0; padding: 0; width: {LAYOUT["LARGURA"]}mm; height: {LAYOUT["ALTURA"]}mm; }}
+img {{ display: block; width: {LAYOUT["LARGURA"]}mm; height: {LAYOUT["ALTURA"]}mm; }}
 </style></head>
 <body><img src="data:image/png;base64,{imagem}" alt="{descricao}"></body>
 </html>'''

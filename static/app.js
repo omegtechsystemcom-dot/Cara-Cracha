@@ -11,6 +11,7 @@ const STATE = {
     planilhaCarregada: false,
     importacaoPendente: null,
     alunosSelecionados: new Set(),
+    alunoLocalizadoCodigo: '',
     formato: 'png',
     mostrarFoto: true,
     mostrarQR: true,
@@ -407,11 +408,18 @@ function atualizarGerarInfo() {
     const pdf = porId('btnPdfTurma');
     pdf.disabled = !turma || !totalTurma;
     pdf.title = pdf.disabled ? 'Selecione uma turma com alunos' : `Exportar a turma ${turma}`;
+    const localizar = porId('btnLocalizarAluno');
+    localizar.disabled = !alunoSelecionado;
+    localizar.title = alunoSelecionado ? 'Localizar somente este aluno' : 'Selecione um aluno para localizar';
 }
 
 let requisicaoCrachasTurma = 0;
 async function carregarCrachasDaTurma() {
     const turma = porId('gerarTurma').value;
+    const codigoLocalizado = STATE.alunoLocalizadoCodigo;
+    const alunoLocalizado = codigoLocalizado
+        ? STATE.alunos.find(a => String(a.codigo || a.matricula || '') === codigoLocalizado)
+        : null;
     const conteudo = porId('crachasFiltradosConteudo');
     const titulo = porId('crachasFiltradosTitulo');
     const contador = porId('crachasFiltradosTotal');
@@ -420,32 +428,46 @@ async function carregarCrachasDaTurma() {
     botaoArquivar.disabled = true;
     limpar(conteudo);
     contador.textContent = '';
-    if (!turma) {
+    if (!turma && !alunoLocalizado) {
         titulo.textContent = 'Crachás gerados por turma';
         conteudo.className = 'crachas-estado-vazio';
         conteudo.textContent = 'Selecione uma turma para visualizar os crachás já gerados.';
         return;
     }
-    titulo.textContent = `Crachás gerados — turma ${turma}`;
+    titulo.textContent = alunoLocalizado
+        ? `Cracha localizado - ${alunoLocalizado.nome}`
+        : `Crachas gerados - turma ${turma}`;
     conteudo.className = 'crachas-estado-vazio';
     conteudo.textContent = 'Carregando crachás...';
     try {
-        const data = await API.get(`/api/crachas?turma=${encodeURIComponent(turma)}`);
+        const parametros = new URLSearchParams();
+        if (turma) parametros.set('turma', turma);
+        if (codigoLocalizado) parametros.set('codigo', codigoLocalizado);
+        const data = await API.get(`/api/crachas?${parametros.toString()}`);
         if (numero !== requisicaoCrachasTurma) return;
         const crachas = data.crachas || [];
-        const reconciliacao = await API.get(`/api/reconciliacao?turma=${encodeURIComponent(turma)}`);
-        if (numero !== requisicaoCrachasTurma) return;
-        botaoArquivar.disabled = !reconciliacao.total_obsoletos;
-        botaoArquivar.title = reconciliacao.total_obsoletos
-            ? `Arquivar ${reconciliacao.total_obsoletos} arquivo(s) que não pertencem à turma ativa`
-            : 'Nenhum arquivo obsoleto encontrado';
+        if (turma && !codigoLocalizado) {
+            const reconciliacao = await API.get(`/api/reconciliacao?turma=${encodeURIComponent(turma)}`);
+            if (numero !== requisicaoCrachasTurma) return;
+            botaoArquivar.disabled = !reconciliacao.total_obsoletos;
+            botaoArquivar.title = reconciliacao.total_obsoletos
+                ? `Arquivar ${reconciliacao.total_obsoletos} arquivo(s) que não pertencem à turma ativa`
+                : 'Nenhum arquivo obsoleto encontrado';
+        } else {
+            botaoArquivar.disabled = true;
+            botaoArquivar.title = codigoLocalizado
+                ? 'Arquivamento disponível somente na visão da turma'
+                : 'Selecione uma turma com arquivos obsoletos';
+        }
         contador.textContent = `${crachas.length} crachá(s)`;
         limpar(conteudo);
         if (!crachas.length) {
             conteudo.className = 'crachas-estado-vazio crachas-estado-aviso';
             conteudo.append(
-                criar('strong', `Nenhum crachá foi gerado para a turma ${turma}.`),
-                criar('span', 'Selecione os alunos e use “Gerar Crachás” para criar os arquivos.')
+                criar('strong', alunoLocalizado
+                    ? `Nenhum cracha foi gerado para ${alunoLocalizado.nome}.`
+                    : `Nenhum cracha foi gerado para a turma ${turma}.`),
+                criar('span', 'Use Gerar Crachas para criar os arquivos.')
             );
             return;
         }
@@ -497,6 +519,7 @@ function carregarFiltroGeracao() {
 }
 
 function filtrarGeracaoPorTurma() {
+    STATE.alunoLocalizadoCodigo = '';
     preencherSelectAlunosGeracao();
     atualizarGerarInfo();
     porId('resultadoGeracao').style.display = 'none';
@@ -504,8 +527,33 @@ function filtrarGeracaoPorTurma() {
 }
 
 function filtrarGeracaoPorAluno() {
+    STATE.alunoLocalizadoCodigo = '';
     atualizarGerarInfo();
     porId('resultadoGeracao').style.display = 'none';
+    carregarCrachasDaTurma();
+}
+
+function localizarAlunoGeracao() {
+    const codigo = porId('gerarAluno').value;
+    if (!codigo) {
+        mostrarToast('Selecione um aluno para localizar.', 'error');
+        return;
+    }
+    const aluno = STATE.alunos.find(a => String(a.codigo || a.matricula || '') === codigo);
+    if (!aluno) {
+        mostrarToast('Aluno nao encontrado na base carregada.', 'error');
+        return;
+    }
+    if (aluno.turma && porId('gerarTurma').value !== aluno.turma) {
+        porId('gerarTurma').value = aluno.turma;
+        preencherSelectAlunosGeracao();
+        porId('gerarAluno').value = codigo;
+    }
+    STATE.alunoLocalizadoCodigo = codigo;
+    atualizarGerarInfo();
+    porId('resultadoGeracao').style.display = 'none';
+    carregarCrachasDaTurma();
+    mostrarToast(`Aluno localizado: ${aluno.nome}.`, 'success');
 }
 
 function mudarFormato(input) {
@@ -616,6 +664,34 @@ async function exportarPdfTurma() {
     } finally {
         botao.textContent = '📄 EXPORTAR PDF DA TURMA';
         atualizarGerarInfo();
+    }
+}
+
+async function baixarPngsPorTurma() {
+    const turma = porId('gerarTurma').value;
+    const botao = porId('btnPngsTurmas');
+    botao.disabled = true;
+    botao.textContent = 'Montando ZIP...';
+    try {
+        const data = await API.post('/api/exportar-pngs-turmas', {
+            turma,
+            mostrar_foto: STATE.mostrarFoto,
+            mostrar_qr: STATE.mostrarQR,
+        });
+        const link = document.createElement('a');
+        link.href = data.download_url;
+        link.download = data.nome_arquivo;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        const alvo = turma ? `turma ${turma}` : 'todas as turmas';
+        mostrarToast(`${data.total_gerados} PNG(s) preparados para ${alvo}.`, data.total_erros ? 'warning' : 'success');
+        await Promise.all([carregarDashboard(), carregarCrachasDaTurma()]);
+    } catch (erro) {
+        mostrarToast(erro.message, 'error');
+    } finally {
+        botao.textContent = 'BAIXAR PNGS POR TURMA';
+        botao.disabled = false;
     }
 }
 
@@ -790,8 +866,10 @@ function registrarEventos() {
         input.addEventListener('change', atualizarOpcoesCracha));
     porId('gerarTurma').addEventListener('change', filtrarGeracaoPorTurma);
     porId('gerarAluno').addEventListener('change', filtrarGeracaoPorAluno);
+    porId('btnLocalizarAluno').addEventListener('click', localizarAlunoGeracao);
     porId('btnGerar').addEventListener('click', gerarCrachas);
     porId('btnPdfTurma').addEventListener('click', exportarPdfTurma);
+    porId('btnPngsTurmas').addEventListener('click', baixarPngsPorTurma);
     porId('btnArquivarObsoletos').addEventListener('click', arquivarObsoletos);
     porId('btnPreview').addEventListener('click', () => {
         const candidato = alunosParaGerar()[0];

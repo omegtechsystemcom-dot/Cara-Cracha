@@ -25,8 +25,8 @@ DIRS = {
 
 # Configurações de layout do crachá (em milímetros)
 LAYOUT = {
-    "LARGURA": 50,       # Largura do crachá em mm (modelo IEMA)
-    "ALTURA": 85,        # Altura do crachá em mm (modelo IEMA)
+    "LARGURA": 50,       # Largura do crachá em mm (5,0 cm)
+    "ALTURA": 85,        # Altura do crachá em mm (8,5 cm)
     "FOTO_X": 24,        # Largura da foto em mm
     "FOTO_Y": 32,        # Altura da foto em mm
     "QR_CODE": 18,       # Tamanho do QR Code em mm

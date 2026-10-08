@@ -121,7 +121,7 @@ class TestQRGenerator(unittest.TestCase):
         dados = QRCodeGenerator().gerar_para_aluno(
             "ALUNO TESTE", "101", codigo="2026108617111"
         )
-        self.assertEqual(dados, "IEMA|V1|COD=2026108617111|TURMA=101")
+        self.assertEqual(dados, "2026108617111")
 
     def test_qr_do_aluno_exige_codigo(self):
         from cracha_extractor.qr_generator import QRCodeGenerator
@@ -133,8 +133,7 @@ class TestQRGenerator(unittest.TestCase):
         dados = QRCodeGenerator().gerar_para_aluno(
             "ALUNO TESTE", "101", dados_extras="REFERENCIA EXTERNA", codigo="2024001"
         )
-        self.assertTrue(dados.startswith("IEMA|V1|COD=2024001|TURMA=101|"))
-        self.assertIn("DADOS=REFERENCIA%20EXTERNA", dados)
+        self.assertEqual(dados, "2024001")
 
 
 class TestFotoHandler(unittest.TestCase):

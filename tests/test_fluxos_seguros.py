@@ -109,7 +109,7 @@ def test_geracao_usa_codigo_no_arquivo_qr_foto_e_manifesto(tmp_path, monkeypatch
     assert resposta.status_code == 200
     item = resposta.get_json()["resultados"][0]
     assert item["arquivo"].endswith("101/A001.png") or item["arquivo"].endswith("101\\A001.png")
-    assert "COD=A001" in item["qr_identificador"]
+    assert item["qr_identificador"] == "A001"
 
     manifesto = json.loads((montados / "101" / "manifesto.json").read_text(encoding="utf-8"))
     registro = manifesto["crachas"][0]
@@ -131,6 +131,37 @@ def test_reconciliacao_considera_apenas_saida_oficial_por_codigo(tmp_path, monke
     assert dados["total_faltantes"] == 1
     assert dados["total_obsoletos"] == 1
     assert dados["valido"] is False
+
+
+def test_exportar_pngs_turmas_gera_zip_com_pngs_individuais(tmp_path, monkeypatch):
+    monkeypatch.setitem(api.DIRS, "MONTADOS", tmp_path / "montados")
+    monkeypatch.setitem(api.DIRS, "DIAG_SAIDA", tmp_path / "diag")
+    api.app_state["alunos"] = [
+        Aluno("ALUNO UM", "101", "CURSO", "A001"),
+        Aluno("ALUNO DOIS", "102", "CURSO", "B002"),
+    ]
+    api.app_state["turmas"] = {"101": object(), "102": object()}
+
+    def exportar(self, aluno_recebido, caminho):
+        caminho = Path(caminho)
+        caminho.parent.mkdir(parents=True, exist_ok=True)
+        caminho.write_bytes(f"png-{aluno_recebido.matricula}".encode("utf-8"))
+        return caminho
+
+    monkeypatch.setattr(api.ExportadorCracha, "exportar_png", exportar)
+    resposta = api.app.test_client().post("/api/exportar-pngs-turmas", json={
+        "mostrar_foto": True,
+        "mostrar_qr": True,
+    })
+
+    assert resposta.status_code == 200
+    dados = resposta.get_json()
+    assert dados["total_gerados"] == 2
+    caminho_zip = Path(dados["arquivo"])
+    with zipfile.ZipFile(caminho_zip) as arquivo:
+        assert sorted(arquivo.namelist()) == ["101/A001.png", "102/B002.png"]
+        assert arquivo.read("101/A001.png") == b"png-A001"
+        assert arquivo.read("102/B002.png") == b"png-B002"
 
 
 def test_csp_e_frontend_sem_handlers_inline():

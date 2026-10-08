@@ -23,7 +23,7 @@ try:
 except ImportError:
     CORS = None
 
-from .config import BASE_DIR, DIRS, EXTENSOES_PLANILHA, FORMATOS_SAIDA
+from .config import BASE_DIR, DIRS, EXTENSOES_PLANILHA, FORMATOS_SAIDA, LAYOUT
 from . import __version__
 from .estado import carregar_estado_planilha, salvar_estado_planilha
 from .planilha_reader import PlanilhaReader
@@ -226,6 +226,67 @@ def _reconciliar_turma(turma: str) -> dict:
         "total_obsoletos": len(obsoletos),
         "valido": not faltantes and not obsoletos,
     }
+
+
+def _gerar_pngs_para_download(alunos: list, mostrar_foto: bool, mostrar_qr: bool):
+    config = ConfiguracaoCracha(
+        turma_nome="",
+        mostrar_foto=mostrar_foto,
+        mostrar_qr_code=mostrar_qr,
+    )
+    montador = MontadorCracha(config)
+    exportador = ExportadorCracha(montador)
+    resultados = []
+    erros = []
+    manifestos_por_pasta = {}
+
+    for aluno in alunos:
+        try:
+            codigo = QRCodeGenerator.normalizar_codigo(aluno.matricula)
+            nome_base = exportador._sanitizar_nome(codigo)
+            pasta_aluno = DIRS["MONTADOS"] / exportador._sanitizar_nome(aluno.turma or "SEM_TURMA")
+            pasta_aluno.mkdir(parents=True, exist_ok=True)
+            caminho_final = pasta_aluno / f"{nome_base}.png"
+            caminho_temp = pasta_aluno / f".{nome_base}.{uuid.uuid4().hex}.tmp.png"
+            exportador.exportar_png(aluno, caminho_temp)
+            caminho_temp.replace(caminho_final)
+
+            qr_identificador = (
+                QRCodeGenerator().gerar_para_aluno(
+                    aluno.nome, aluno.turma, aluno.qr_code_dados, aluno.matricula
+                ) if mostrar_qr else None
+            )
+            foto_usada = getattr(montador.foto_handler, "ultima_foto_caminho", None)
+            entrada_manifesto = {
+                "codigo": codigo,
+                "nome": aluno.nome,
+                "turma": aluno.turma,
+                "arquivo": caminho_final.name,
+                "formato": "png",
+                "sha256": _hash_opcional(caminho_final),
+                "foto": str(foto_usada) if foto_usada else None,
+                "foto_sha256": _hash_opcional(foto_usada),
+                "qr": qr_identificador,
+                "gerado_em": datetime.now().isoformat(timespec="seconds"),
+            }
+            manifestos_por_pasta.setdefault(pasta_aluno, []).append(entrada_manifesto)
+            resultados.append({
+                "nome": aluno.nome,
+                "turma": aluno.turma,
+                "codigo": aluno.matricula,
+                "arquivo": str(caminho_final),
+                "caminho": caminho_final,
+                "formato": "png",
+                "tamanho_kb": round(caminho_final.stat().st_size / 1024, 1),
+            })
+        except Exception as e:
+            erros.append({"nome": aluno.nome, "erro": str(e)})
+            logger.error(f"Erro ao gerar PNG de {aluno.nome}: {e}")
+
+    for pasta, entradas in manifestos_por_pasta.items():
+        _salvar_manifesto(pasta, entradas)
+
+    return resultados, erros
 
 
 # ========== ROTAS DA API ==========
@@ -614,6 +675,64 @@ def gerar_crachas():
     })
 
 
+@app.route("/api/exportar-pngs-turmas", methods=["POST"])
+def exportar_pngs_turmas():
+    """Gera PNGs individuais e baixa um ZIP organizado por turma."""
+    data = request.get_json() or {}
+    alunos = app_state["alunos"]
+    if not alunos:
+        return jsonify({"erro": "Nenhum dado carregado. Importe uma planilha primeiro."}), 400
+
+    turma = str(data.get("turma", "")).strip()
+    alunos_exportar = [a for a in alunos if not turma or a.turma == turma]
+    if not alunos_exportar:
+        return jsonify({"erro": f"Nenhum aluno encontrado para a turma {turma}."}), 404
+
+    mostrar_qr = data.get("mostrar_qr", True)
+    if mostrar_qr:
+        sem_codigo, duplicados = _validar_codigos_qr(alunos_exportar)
+        if sem_codigo or duplicados:
+            return jsonify({
+                "erro": "Corrija os codigos vazios ou duplicados antes de exportar os PNGs.",
+                "sem_codigo": sem_codigo,
+                "codigos_duplicados": duplicados,
+            }), 400
+
+    resultados, erros = _gerar_pngs_para_download(
+        alunos_exportar,
+        mostrar_foto=data.get("mostrar_foto", True),
+        mostrar_qr=mostrar_qr,
+    )
+    if not resultados:
+        return jsonify({"erro": "Nenhum PNG foi gerado.", "erros": erros}), 500
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    nome_zip = (
+        f"Crachas_PNG_Turma_{ExportadorCracha._sanitizar_nome(turma)}_{timestamp}.zip"
+        if turma else f"Crachas_PNG_por_Turma_{timestamp}.zip"
+    )
+    pasta_saida = DIRS["DIAG_SAIDA"] / "downloads"
+    pasta_saida.mkdir(parents=True, exist_ok=True)
+    caminho_zip = pasta_saida / nome_zip
+
+    with zipfile.ZipFile(caminho_zip, "w", compression=zipfile.ZIP_DEFLATED) as arquivo_zip:
+        for item in sorted(resultados, key=lambda r: (str(r["turma"]), str(r["nome"]))):
+            caminho = Path(item["caminho"])
+            pasta_turma = ExportadorCracha._sanitizar_nome(item["turma"] or "SEM_TURMA")
+            arquivo_zip.write(caminho, f"{pasta_turma}/{caminho.name}")
+
+    return jsonify({
+        "total_gerados": len(resultados),
+        "total_erros": len(erros),
+        "erros": erros,
+        "turma": turma,
+        "arquivo": str(caminho_zip),
+        "nome_arquivo": nome_zip,
+        "download_url": f"/downloads/{quote(nome_zip, safe='')}",
+        "tamanho_mb": round(caminho_zip.stat().st_size / 1024 / 1024, 2),
+    })
+
+
 @app.route("/api/exportar-pdf-turma", methods=["POST"])
 def exportar_pdf_turma():
     """Gera uma folha A4 de impressao para a turma selecionada."""
@@ -661,7 +780,7 @@ def exportar_pdf_turma():
         ),
         "total_crachas": resultado["total_crachas"],
         "total_paginas": resultado["total_paginas"],
-        "tamanho_cracha_mm": "50 x 85",
+        "tamanho_cracha_mm": f"{LAYOUT['LARGURA']} x {LAYOUT['ALTURA']}",
         "folha": "A4 paisagem",
     })
 
@@ -747,10 +866,17 @@ def baixar_exemplo():
 def listar_crachas_gerados():
     """Lista os crachás já gerados, opcionalmente filtrados por turma."""
     turma = str(request.args.get("turma", "")).strip()
+    codigo = QRCodeGenerator.normalizar_codigo(request.args.get("codigo", ""))
     diag = Diagnosticador()
     crachas = diag.listar_crachas_montados()
     if turma:
         crachas = [cracha for cracha in crachas if cracha["turma"] == turma]
+    if codigo:
+        crachas = [
+            cracha for cracha in crachas
+            if QRCodeGenerator.normalizar_codigo(cracha.get("codigo")) == codigo
+            or ExportadorCracha._sanitizar_nome(codigo) == Path(cracha["caminho"]).stem
+        ]
 
     for cracha in crachas:
         caminho_relativo = Path(cracha["caminho"]).relative_to(DIRS["MONTADOS"])
@@ -759,6 +885,7 @@ def listar_crachas_gerados():
     return jsonify({
         "crachas": crachas,
         "turma": turma,
+        "codigo": codigo,
         "total": len(crachas),
     })
 
@@ -879,6 +1006,12 @@ def static_files(filename):
 def crachas_arquivos(filename):
     """Serve arquivos de crachás gerados."""
     return send_from_directory(str(DIRS["MONTADOS"]), filename)
+
+
+@app.route("/downloads/<path:filename>")
+def downloads_arquivos(filename):
+    """Serve pacotes gerados para download."""
+    return send_from_directory(str(DIRS["DIAG_SAIDA"] / "downloads"), filename)
 
 
 # ========== UTILITÁRIOS ==========
